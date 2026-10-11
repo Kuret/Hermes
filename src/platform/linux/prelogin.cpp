@@ -152,14 +152,14 @@ namespace platf::prelogin {
      * these bits, and before login it goes to the greeter. The groups are the
      * account's, not this process's: what counts is the next boot.
      */
-    std::optional<bool> opens_without_seat_grant(const fs::path &node) {
+    std::optional<bool> opens_without_seat_grant(const fs::path &node, bool write_required = true) {
       struct stat info {};
       if (::stat(node.c_str(), &info) != 0) {
         return std::nullopt;
       }
       const uid_t uid = ::getuid();
       if (info.st_uid == uid) {
-        return (info.st_mode & S_IRUSR) && (info.st_mode & S_IWUSR);
+        return (info.st_mode & S_IRUSR) && (!write_required || (info.st_mode & S_IWUSR));
       }
 
       const auto *account = ::getpwuid(uid);
@@ -174,9 +174,9 @@ namespace platf::prelogin {
         groups.resize(static_cast<size_t>(std::max(count, 0)));
       }
       if (std::find(groups.begin(), groups.end(), info.st_gid) != groups.end()) {
-        return (info.st_mode & S_IRGRP) && (info.st_mode & S_IWGRP);
+        return (info.st_mode & S_IRGRP) && (!write_required || (info.st_mode & S_IWGRP));
       }
-      return (info.st_mode & S_IROTH) && (info.st_mode & S_IWOTH);
+      return (info.st_mode & S_IROTH) && (!write_required || (info.st_mode & S_IWOTH));
     }
 
     std::optional<bool> hermes_kms_opens_without_seat_grant() {
@@ -192,7 +192,10 @@ namespace platf::prelogin {
           ec.clear();
           continue;
         }
-        const auto opens = opens_without_seat_grant(fs::path {"/dev/dri"} / name);
+        // Hermes-KMS private ioctls need only an O_RDONLY render fd. The
+        // packaged driver reserves O_RDWR for root so generic GPU probes skip
+        // this capture-only node.
+        const auto opens = opens_without_seat_grant(fs::path {"/dev/dri"} / name, false);
         if (opens.value_or(false)) {
           return true;
         }

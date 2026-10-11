@@ -102,8 +102,10 @@ sessions before launching the configured app, selected by the
 ### Hermes-KMS (preferred, zero-copy)
 
 The compositor owns the virtual card and scans out the desktop; Hermes opens the
-Hermes-KMS render node and pulls each frame as a DMA-BUF, which a real GPU
-imports and encodes. On Linux/KDE Wayland this depends on:
+Hermes-KMS render node read-only and pulls each frame as a DMA-BUF, which a real
+GPU imports and encodes. The read-only open is intentional: generic GPU probes
+such as Chromium/Electron use `O_RDWR` and must skip this capture-only node. On
+Linux/KDE Wayland this depends on:
 
 - the `hermes_kms` kernel module loaded with `initial_enabled=0`, leaving its
   connector disconnected until Hermes owns it for a stream, and its card left

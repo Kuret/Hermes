@@ -1235,7 +1235,7 @@ namespace VDISPLAY {
         if (!is_render_node(entry.path())) {
           continue;
         }
-        const int fd = ::open(entry.path().c_str(), O_RDWR | O_CLOEXEC);
+        const int fd = ::open(entry.path().c_str(), O_RDONLY | O_CLOEXEC);
         if (fd < 0) {
           continue;
         }
@@ -1283,15 +1283,18 @@ namespace VDISPLAY {
       std::vector<device_t> devices;
       try {
         for (const auto &entry : fs::directory_iterator("/dev/dri")) {
-          // All Hermes control/capture ioctls are DRM_RENDER_ALLOW. The broker
-          // deliberately does not need access to private-seat primary cards;
-          // those are opened later by the compositor through seatd.
+          // All Hermes control/capture ioctls are DRM_RENDER_ALLOW and work
+          // through an O_RDONLY fd. The driver intentionally grants only read
+          // access so O_RDWR GPU probes (notably Chromium/Electron) skip its
+          // capture-only render nodes. The broker deliberately does not need
+          // access to private-seat primary cards; those are opened later by
+          // the compositor through seatd.
           if (!is_render_node(entry.path())) {
             continue;
           }
 
           device_t candidate {};
-          candidate.fd = ::open(entry.path().c_str(), O_RDWR | O_CLOEXEC);
+          candidate.fd = ::open(entry.path().c_str(), O_RDONLY | O_CLOEXEC);
           if (candidate.fd < 0) {
             continue;
           }
@@ -1449,7 +1452,7 @@ namespace VDISPLAY {
         }
 
         device_t candidate {};
-        candidate.fd = ::open(entry.path().c_str(), O_RDWR | O_CLOEXEC);
+        candidate.fd = ::open(entry.path().c_str(), O_RDONLY | O_CLOEXEC);
         if (candidate.fd < 0) {
           continue;
         }
