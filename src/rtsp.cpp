@@ -1284,6 +1284,7 @@ namespace rtsp_stream {
       return;
     }
 
+    config.gcmap = session.gcmap;
     auto stream_session = stream::session::alloc(config, session);
     server->insert(stream_session);
     if (stream::session::start(*stream_session, sock.remote_endpoint().address().to_string())) {

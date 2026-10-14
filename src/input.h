@@ -23,9 +23,14 @@ namespace input {
 
   bool probe_gamepads();
 
+  /**
+   * @param session_tag Seat of an isolated session; empty for the host's.
+   * @param launch_gamepads Gamepads to plug in now (the client's gcmap).
+   */
   std::shared_ptr<input_t> alloc(
     safe::mail_t mail,
-    const std::string &session_tag = {}
+    const std::string &session_tag = {},
+    int launch_gamepads = 0
   );
 
 #ifdef SUNSHINE_TESTS

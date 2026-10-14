@@ -2296,7 +2296,8 @@ namespace stream {
         session.mail,
         session.isolated_session ?
           session.isolated_seat_id :
-          std::string {}
+          std::string {},
+        session.isolated_session ? session.config.gcmap.value_or(0) : 0
       );
 
       session.broadcast_ref = broadcast.ref();

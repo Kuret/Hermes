@@ -1798,15 +1798,54 @@ namespace input {
     return true;
   }
 
+  /**
+   * @brief Plug in the gamepads the client reported at launch.
+   *
+   * Clients announce a gamepad only with its first input, so until then the
+   * session sees none. A fixed gamepad type needs nothing from that
+   * announcement; with "auto" the type comes from it, so wait for it.
+   */
+  void attach_launch_gamepads(std::shared_ptr<input_t> &input, int mask) {
+    if (!config::input.controller || config::input.gamepad == "auto"sv) {
+      return;
+    }
+
+    for (int nr = 0; nr < (int) input->gamepads.size(); ++nr) {
+      auto &gamepad = input->gamepads[nr];
+      if (!(mask & (1 << nr)) || gamepad.id >= 0) {
+        continue;
+      }
+
+      auto id = alloc_id(gamepadMask);
+      if (id < 0) {
+        return;
+      }
+
+      if (platf::alloc_gamepad(*input->platform_input, {id, (uint8_t) nr}, {}, input->feedback_queue)) {
+        free_id(gamepadMask, id);
+        return;
+      }
+
+      gamepad.id = id;
+    }
+  }
+
   std::shared_ptr<input_t> alloc(
     safe::mail_t mail,
-    const std::string &session_tag
+    const std::string &session_tag,
+    int launch_gamepads
   ) {
     auto input = std::make_shared<input_t>(
       mail->event<input::touch_port_t>(mail::touch_port),
       mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback),
       session_tag
     );
+
+    if (launch_gamepads) {
+      task_pool.push([input, launch_gamepads]() mutable {
+        attach_launch_gamepads(input, launch_gamepads);
+      });
+    }
 
     // Workaround to ensure new frames will be captured when a client connects.
     //
