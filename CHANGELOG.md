@@ -75,6 +75,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Hermes opens Hermes-KMS control/capture render nodes with `O_RDONLY`. Updated
+  Hermes-KMS udev policy grants the active or configured consumer read-only
+  access, which still permits every private capture ioctl and exported fd but
+  makes Chromium/Electron's `O_RDWR` GPU probe skip this capture-only device.
+  This prevents Chrome, Discord and other Electron applications from freezing
+  when Hermes-KMS registers before the real GPU ([Hermes-KMS #13]).
 - Hermes no longer waits without limit for `kscreen-doctor`. A call that did
   not return held the lock every virtual display needs, so Hermes neither
   finished starting nor accepted a session. Each call now has ten seconds,
