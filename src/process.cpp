@@ -163,6 +163,21 @@ namespace proc {
       return {};
     }
 
+    // Discord listens on discord-ipc-N in the host's runtime directory, which a
+    // session's XDG_RUNTIME_DIR replaces; link them so Rich Presence still works.
+    void link_host_discord_ipc(const std::string &runtime_dir) {
+      const auto host_runtime = host_runtime_dir();
+      if (host_runtime.empty()) {
+        return;
+      }
+      for (int i = 0; i < 10; ++i) {
+        const auto name = "discord-ipc-" + std::to_string(i);
+        std::error_code ec;
+        std::filesystem::create_symlink(std::filesystem::path {host_runtime} / name,
+                                        std::filesystem::path {runtime_dir} / name, ec);
+      }
+    }
+
     std::string isolated_runtime_root() {
       if (const char *xdg_runtime_dir = std::getenv("XDG_RUNTIME_DIR");
           xdg_runtime_dir && *xdg_runtime_dir) {
@@ -1246,6 +1261,9 @@ namespace proc {
                        << runtime->assets_dir << ": "
                        << (dir_ec ? dir_ec.message() : std::strerror(errno));
       return -1;
+    }
+    if (!runtime->account) {
+      link_host_discord_ipc(runtime->runtime_dir);
     }
 
     auto cleanup = util::fail_guard([&]() {
