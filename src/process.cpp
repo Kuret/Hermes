@@ -698,6 +698,8 @@ namespace proc {
       env["LIBSEAT_BACKEND"] = "seatd";
       env["SEATD_SOCK"] = runtime.seatd_socket;
       env["WLR_DRM_DEVICES"] = runtime.drm_device_path;
+      // The seat's input devices appear once the client streams.
+      env["WLR_LIBINPUT_NO_DEVICES"] = "1";
 
       env["SUNSHINE_APP_ID"] = app.id;
       env["SUNSHINE_APP_NAME"] = app.name;
@@ -1371,7 +1373,19 @@ namespace proc {
     const auto connector = VDISPLAY::getHermesKmsConnectorName(runtime->display_name);
     std::string launch_command;
 
+    // Erased, not emptied: wlroots and gamescope try to nest whenever these are
+    // set at all, and exit before touching the DRM device they were handed.
+    const auto forget_wayland_display = [&runtime]() {
+      runtime->wayland_display.clear();
+      for (const auto *name : {"WAYLAND_DISPLAY", "WAYLAND_SOCKET",
+                               "_WAYLAND_DISPLAY", "DISPLAY",
+                               "HERMES_WAYLAND_DISPLAY"}) {
+        runtime->env.erase(name);
+      }
+    };
+
     if (runtime->profile == "application") {
+      forget_wayland_display();
       if (app.cmd.empty()) {
         BOOST_LOG(error) << "[IsolatedSession] Application profile requires a command.";
         return -1;
@@ -1380,15 +1394,6 @@ namespace proc {
       if (gamescope_binary.empty()) {
         BOOST_LOG(error) << "[IsolatedSession] Application profile requires gamescope.";
         return -1;
-      }
-
-      // A standalone DRM Gamescope must not inherit the desktop's display
-      // sockets: otherwise it can accidentally choose a nested backend.
-      // The isolated session owns its own Wayland and Xwayland servers.
-      for (const auto *name : {"WAYLAND_DISPLAY", "WAYLAND_SOCKET",
-                               "_WAYLAND_DISPLAY", "DISPLAY",
-                               "HERMES_WAYLAND_DISPLAY"}) {
-        runtime->env.erase(name);
       }
 
       // Gamescope scans out on this session's own Hermes-KMS card and renders
@@ -1445,13 +1450,6 @@ namespace proc {
         runtime->env["GAMESCOPE_PREFER_DRM"] = runtime->drm_device_path;
       }
 
-      // The session seat starts empty: its virtual devices are created when
-      // the stream starts, after Gamescope is up. wlroots' libinput backend
-      // refuses to start on a seat with no devices unless told to - the same
-      // thing weston is told with --continue-without-input. Harmless where
-      // the build still reads seat0.
-      runtime->env["WLR_LIBINPUT_NO_DEVICES"] = "1";
-
       // Steam mode is per application. The environment switch predates the
       // setting and stays as a process-wide override for testing.
       bool steam_mode = app.gamescope_steam_mode;
@@ -1490,18 +1488,7 @@ namespace proc {
       // fails to connect to a socket that will never exist, and exits before
       // it ever looks at the DRM device it was given.
       if (profile->discover_socket) {
-        runtime->wayland_display.clear();
-        // Erased, not emptied. wlroots picks its backend by asking whether
-        // these are set at all - getenv() != NULL - so leaving an empty
-        // WAYLAND_DISPLAY or DISPLAY behind makes it try to nest inside a
-        // parent compositor or an X server, fail to connect to something that
-        // was never there, and exit before it looks at the DRM device it was
-        // handed. populate_session_environment() sets both, so both have to go.
-        for (const auto *name : {"WAYLAND_DISPLAY", "WAYLAND_SOCKET",
-                                 "_WAYLAND_DISPLAY", "DISPLAY",
-                                 "HERMES_WAYLAND_DISPLAY"}) {
-          runtime->env.erase(name);
-        }
+        forget_wayland_display();
       }
 
       // Expanded against the assets directory, not the session's runtime

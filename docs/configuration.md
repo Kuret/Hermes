@@ -1458,9 +1458,12 @@ alias; new configurations should use the key above.
             to prevent.
 
             Requires a Hermes-KMS driver speaking UAPI 11 or newer and its
-            session-seat udev rule, <code>gamescope</code>, the chosen session
-            compositor, and one packaged
-            <code>hermes-kms-seatd@N.service</code> private broker per device.
+            session-seat udev rule, a <code>gamescope</code> that can scan out
+            on another device than it renders with (<code>--prefer-drm</code>
+            or <code>--drm-device</code>, as in Hermes' own Gamescope build),
+            the chosen session compositor, and one packaged
+            <code>hermes-kms-seatd@N.service</code> private broker per device,
+            which <code>hermes-kms-setup</code> configures for the Hermes user.
             The Hermes user must be a member of the <code>seat</code> group.
             Hermes maps device N to
             <code>/run/hermes-kms-seatd/N/seatd.sock</code>.
