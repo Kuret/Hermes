@@ -15,6 +15,9 @@
 #include "src/platform/common.h"
 #include "src/platform/linux/virtual_display.h"
 #include "src/utility.h"
+#ifdef HERMES_LVH_PEN_TOUCH
+#include "virtualhid_pen_touch.h"
+#endif
 
 using namespace std::literals;
 
@@ -92,6 +95,11 @@ namespace platf {
   };
 
   struct client_input_raw_t: public client_input_t {
+#ifdef HERMES_LVH_PEN_TOUCH
+    client_input_raw_t(input_t &input):
+        global((input_raw_t *) input.get()),
+        virtualhid_devices(std::make_unique<virtualhid::client_devices_t>(global->session_tag)) {}
+#else
     client_input_raw_t(input_t &input):
         global((input_raw_t *) input.get()),
         touch(inputtino::TouchScreen::create({
@@ -117,15 +125,22 @@ namespace platf {
         BOOST_LOG(warning) << "Unable to create virtual pen tablet: " << pen.getErrorMessage();
       }
     }
+#endif
 
     input_raw_t *global;
 
+#ifdef HERMES_LVH_PEN_TOUCH
+    // Each client has its own virtual input devices and contact state.
+    std::unique_ptr<virtualhid::client_devices_t> virtualhid_devices;
+#else
     // Device state and handles for pen and touch input must be stored in the per-client
     // input context, because each connected client may be sending their own independent
     // pen/touch events. To maintain separation, we expose separate pen and touch devices
     // for each client.
     inputtino::Result<inputtino::TouchScreen> touch;
     inputtino::Result<inputtino::PenTablet> pen;
+  };
+#endif
   };
 
   inline float deg2rad(float degree) {
