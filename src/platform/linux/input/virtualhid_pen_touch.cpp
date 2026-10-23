@@ -157,14 +157,28 @@ namespace platf::virtualhid {
       return;
     }
 
-    // Buttons are independent of contact state, so a barrel-button press
-    // cannot synthesize a pen-up while the user is drawing.
-    log_failure("pen primary", devices.pen->button(lvh::PenButton::primary,
-                      (event.penButtons & LI_PEN_BUTTON_PRIMARY) != 0));
-    log_failure("pen secondary", devices.pen->button(lvh::PenButton::secondary,
-                      (event.penButtons & LI_PEN_BUTTON_SECONDARY) != 0));
-    log_failure("pen tertiary", devices.pen->button(lvh::PenButton::tertiary,
-                      (event.penButtons & LI_PEN_BUTTON_TERTIARY) != 0));
+    // libvirtualhid syncs every button operation into its own evdev frame.
+    // Only submit transitions; forwarding all three buttons at 120 Hz would
+    // generate 360 unnecessary SYN_REPORT frames per second.
+    const auto current_buttons = static_cast<std::uint8_t>(event.penButtons);
+    auto update_button = [&](std::uint8_t bit, lvh::PenButton button) {
+      if (((current_buttons ^ devices.pen_buttons) & bit) == 0) {
+        return;
+      }
+      const bool pressed = (current_buttons & bit) != 0;
+      const auto result = devices.pen->button(button, pressed);
+      log_failure("pen button", result);
+      if (result.ok()) {
+        if (pressed) {
+          devices.pen_buttons |= bit;
+        } else {
+          devices.pen_buttons &= static_cast<std::uint8_t>(~bit);
+        }
+      }
+    };
+    update_button(LI_PEN_BUTTON_PRIMARY, lvh::PenButton::primary);
+    update_button(LI_PEN_BUTTON_SECONDARY, lvh::PenButton::secondary);
+    update_button(LI_PEN_BUTTON_TERTIARY, lvh::PenButton::tertiary);
 
     if (event.eventType == LI_TOUCH_EVENT_BUTTON_ONLY) {
       return;
