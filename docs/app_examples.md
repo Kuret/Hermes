@@ -358,6 +358,21 @@ When `hermes_kms_isolated_sessions` is enabled, each application can select a
   where the session runs as the Hermes user, or as a unit bound to the
   session's where the session broker gave it a user of its own.
 
+An `application` session runs
+`gamescope --backend=drm --drm-device <card> -W -H -w -h -r <client mode> <steam mode> <flags> -O <connector> -- <cmd>`.
+Two fields tune it:
+
+- `gamescope-steam-mode`: `auto` (default) turns Steam mode on when the
+  command's program is `steam`; `on`/`off` force it. Steam mode passes
+  `-e --xwayland-count 2`: Steam then picks the visible app and draws its
+  overlay, and games run on their own Xwayland so the overlay cannot take
+  their X focus (Wine games minimize when it does). Windows without a Steam
+  app ID cannot take focus in Steam mode. Off passes `--xwayland-count 1`.
+- `gamescope-args`: replaces the default
+  `--expose-wayland --force-windows-fullscreen`; empty keeps it. These flags
+  come after the Steam mode ones, so e.g. `--xwayland-count 1` overrides it.
+  Like `cmd` here, the line is split on whitespace; quotes are not interpreted.
+
 The `desktop` profile is currently a reference Weston desktop, not a complete
 Plasma session. To use the shared host session, disable
 `hermes_kms_isolated_sessions`; mixing shared and isolated app profiles in one

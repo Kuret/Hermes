@@ -103,9 +103,6 @@ namespace proc {
     // shared: legacy marker; rejected while isolation is enabled.
     // application/desktop: force the corresponding isolated profile.
     std::string session_type;
-    // Isolated application sessions only: run Gamescope in Steam mode (-e,
-    // with a second Xwayland), for Steam's gamepad UI and overlay.
-    bool gamescope_steam_mode = false;
     // Isolated sessions only: how long the compositor has to put its first
     // frame on the session's card. Zero picks the profile's default.
     std::chrono::seconds first_frame_timeout {0};
@@ -113,6 +110,13 @@ namespace proc {
     // the global exclusive option. extend/detached/mirror/exclusive: force that
     // layout for this app's session, overriding the global option.
     std::string virtual_display_layout;
+    // Isolated application sessions only. auto: on when the command's program
+    // is steam. on: gamescope's Steam mode (-e) with games on their own
+    // Xwayland. off: plain gamescope with one Xwayland.
+    std::string gamescope_steam_mode;
+    // Isolated application sessions only. Replaces the default optional
+    // gamescope flags when not empty; Hermes still sets backend, card and mode.
+    std::string gamescope_args;
     int  scale_factor;
     std::chrono::seconds exit_timeout;
   };

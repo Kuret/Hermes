@@ -116,6 +116,35 @@ namespace platf::gamescope {
     return true;
   }
 
+  /**
+   * Whether an application runs in Gamescope's Steam mode.
+   *
+   * mode is the app's gamescope-steam-mode: "on" and "off" decide outright;
+   * anything else is auto, which turns it on when the command's program is
+   * steam. The program is the first whitespace-separated word, as
+   * run_command() splits it.
+   */
+  inline bool steam_mode_for(std::string_view mode, std::string_view command) {
+    if (mode == "on") {
+      return true;
+    }
+    if (mode == "off") {
+      return false;
+    }
+    const auto begin = command.find_first_not_of(" \t");
+    if (begin == std::string_view::npos) {
+      return false;
+    }
+    auto program = command.substr(begin, command.find_first_of(" \t", begin) - begin);
+    if (const auto slash = program.rfind('/'); slash != std::string_view::npos) {
+      program.remove_prefix(slash + 1);
+    }
+    return program == "steam";
+  }
+
+  /// The optional flags an application session gets when its app sets none.
+  constexpr std::string_view default_args {"--expose-wayland --force-windows-fullscreen"};
+
   struct launch_t {
     int width = 1920;
     int height = 1080;
@@ -124,6 +153,7 @@ namespace platf::gamescope {
     drm_selector_e selector = drm_selector_e::none;
     std::string scanout_card;  ///< The session card's primary node.
     bool steam_mode = false;
+    std::string args;  ///< The app's gamescope-args; empty means default_args.
     std::string command;  ///< What runs inside Gamescope, after --.
   };
 
@@ -131,33 +161,37 @@ namespace platf::gamescope {
    * The Gamescope command line for one isolated application session.
    *
    * It is handed to run_command(), which splits on whitespace and never
-   * involves a shell, so every value placed here before -- is a number, a
-   * generated connector name or a /dev/dri path.
+   * involves a shell, so every value Hermes places here is a number, a
+   * generated connector name or a /dev/dri path; the app's own flags and
+   * command are split the same way and quotes are not interpreted.
    *
-   * Steam mode is Gamescope's -e, which is what makes the Steam overlay and
-   * its focus handling work, together with a second Xwayland server, which is
-   * how SteamOS runs the gamepad UI and how the session reported in #57 runs
-   * it.
+   * Steam mode is Gamescope's -e: without it every window's app id is its X
+   * id, Steam's base-layer app id never matches, and the overlay stays
+   * invisible while it holds the controller. It also gets a second Xwayland,
+   * as SteamOS runs it, so the overlay cannot take a game's X focus - Wine
+   * games minimize when it does.
+   *
+   * The app's flags come after Hermes' Steam-mode flags, so Gamescope's
+   * last-one-wins options (--xwayland-count) can override them. The backend,
+   * the card, the mode and the connector stay Hermes'.
    */
   inline std::string launch_command(const launch_t &launch) {
     auto command = std::format(
-      "gamescope --backend=drm -W {} -H {} -w {} -h {} -r {} --xwayland-count {} "
-      "--expose-wayland --force-windows-fullscreen",
+      "gamescope --backend=drm -W {} -H {} -w {} -h {} -r {}",
       launch.width,
       launch.height,
       launch.width,
       launch.height,
-      launch.refresh_hz,
-      launch.steam_mode ? 2 : 1
+      launch.refresh_hz
     );
-    if (!launch.connector.empty()) {
-      command += " -O " + launch.connector;
-    }
     if (launch.selector != drm_selector_e::none && !launch.scanout_card.empty()) {
       command += std::format(" {} {}", drm_selector_flag(launch.selector), launch.scanout_card);
     }
-    if (launch.steam_mode) {
-      command += " -e";
+    command += launch.steam_mode ? " -e --xwayland-count 2" : " --xwayland-count 1";
+    command += " ";
+    command += launch.args.empty() ? std::string {default_args} : launch.args;
+    if (!launch.connector.empty()) {
+      command += " -O " + launch.connector;
     }
     command += " -- " + launch.command;
     return command;

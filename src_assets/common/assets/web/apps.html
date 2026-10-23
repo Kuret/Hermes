@@ -417,15 +417,22 @@
           </select>
           <div class="form-text">{{ $t('apps.session_type_desc') }}</div>
         </div>
-        <!-- Steam mode for isolated Gamescope sessions -->
-        <Checkbox v-if="platform === 'linux' && editForm['session-type'] !== 'desktop'"
-                  class="mb-3"
-                  id="gamescopeSteamMode"
-                  label="apps.session_steam_mode"
-                  desc="apps.session_steam_mode_desc"
-                  v-model="editForm['gamescope-steam-mode']"
-                  default="false"
-        ></Checkbox>
+        <!-- gamescope flags for isolated application sessions -->
+        <div class="mb-3" v-if="platform === 'linux' && editForm['session-type'] !== 'desktop'">
+          <label for="gamescopeSteamMode" class="form-label">{{ $t('apps.gamescope_steam_mode') }}</label>
+          <select id="gamescopeSteamMode" class="form-select" v-model="editForm['gamescope-steam-mode']">
+            <option value="auto">{{ $t('apps.gamescope_steam_mode_auto') }}</option>
+            <option value="on">{{ $t('apps.gamescope_steam_mode_on') }}</option>
+            <option value="off">{{ $t('apps.gamescope_steam_mode_off') }}</option>
+          </select>
+          <div class="form-text">{{ $t('apps.gamescope_steam_mode_desc') }}</div>
+        </div>
+        <div class="mb-3" v-if="platform === 'linux' && editForm['session-type'] !== 'desktop'">
+          <label for="gamescopeArgs" class="form-label">{{ $t('apps.gamescope_args') }}</label>
+          <input type="text" class="form-control monospace" id="gamescopeArgs" v-model="editForm['gamescope-args']"
+                 placeholder="--expose-wayland --force-windows-fullscreen" />
+          <div class="form-text">{{ $t('apps.gamescope_args_desc') }}</div>
+        </div>
         <!-- how long an isolated session has to show its first frame -->
         <div class="mb-3" v-if="platform === 'linux'">
           <label for="firstFrameTimeout" class="form-label">{{ $t('apps.session_first_frame_timeout') }}</label>
@@ -597,7 +604,8 @@
     "virtual-display-layout": "auto",
     "unlock-host-session": false,
     "session-type": "auto",
-    "gamescope-steam-mode": false,
+    "gamescope-steam-mode": "auto",
+    "gamescope-args": "",
     "first-frame-timeout": 0,
     "terminate-on-pause": false,
     "gamepad": ""

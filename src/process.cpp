@@ -1450,9 +1450,12 @@ namespace proc {
         runtime->env["GAMESCOPE_PREFER_DRM"] = runtime->drm_device_path;
       }
 
-      // Steam mode is per application. The environment switch predates the
-      // setting and stays as a process-wide override for testing.
-      bool steam_mode = app.gamescope_steam_mode;
+      // Steam picks the visible app and shows its overlay only in gamescope's
+      // Steam mode (-e). Games need an Xwayland apart from Steam's: sharing
+      // one, the overlay takes their X focus and Wine minimizes them for good.
+      // auto turns it on for a steam command; the environment switch predates
+      // the setting and still forces it on everywhere, for testing.
+      bool steam_mode = platf::gamescope::steam_mode_for(app.gamescope_steam_mode, app.cmd);
       if (const char *forced_steam_mode = std::getenv("HERMES_ISOLATED_GAMESCOPE_STEAM_MODE");
           forced_steam_mode && std::string_view {forced_steam_mode} == "1") {
         steam_mode = true;
@@ -1466,8 +1469,10 @@ namespace proc {
         .selector = *selector,
         .scanout_card = runtime->drm_device_path,
         .steam_mode = steam_mode,
+        .args = app.gamescope_args,
         .command = app.cmd,
       });
+      BOOST_LOG(info) << "[IsolatedSession] " << launch_command;
     } else {
       const auto profile = load_compositor_profile(config::video.hermes_kms_session_compositor);
       if (!profile) {
@@ -3612,7 +3617,6 @@ namespace proc {
                                << "' for app " << name << "; using auto.";
             ctx.session_type = "auto";
           }
-          ctx.gamescope_steam_mode = app_node.value("gamescope-steam-mode", false);
           {
             // Accepted as a number or a numeric string, the way an edited
             // apps.json tends to hold it; anything else means the default.
@@ -3643,6 +3647,21 @@ namespace proc {
                                << "' for app " << name << "; using auto.";
             ctx.virtual_display_layout = "auto";
           }
+          // A boolean is how an earlier build of this branch stored it.
+          if (const auto it = app_node.find("gamescope-steam-mode");
+              it != app_node.end() && it->is_boolean()) {
+            ctx.gamescope_steam_mode = it->get<bool>() ? "on" : "off";
+          } else {
+            ctx.gamescope_steam_mode = app_node.value("gamescope-steam-mode", "auto");
+          }
+          if (ctx.gamescope_steam_mode != "auto" &&
+              ctx.gamescope_steam_mode != "on" &&
+              ctx.gamescope_steam_mode != "off") {
+            BOOST_LOG(warning) << "Unknown gamescope-steam-mode '" << ctx.gamescope_steam_mode
+                               << "' for app " << name << "; using auto.";
+            ctx.gamescope_steam_mode = "auto";
+          }
+          ctx.gamescope_args = parse_env_val(this_env, app_node.value("gamescope-args", ""));
           ctx.gamepad = app_node.value("gamepad", "");
 
           // Calculate a unique application id.

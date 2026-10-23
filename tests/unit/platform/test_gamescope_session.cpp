@@ -32,6 +32,7 @@ namespace {
       .selector = selector,
       .scanout_card = "/dev/dri/card3",
       .steam_mode = steam_mode,
+      .args = {},
       .command = "steam -gamepadui",
     };
   }
@@ -88,23 +89,34 @@ namespace {
   TEST(GamescopeSession, ScansOutOnTheSessionCard) {
     EXPECT_EQ(
       launch_command(session(drm_selector_e::prefer_drm, false)),
-      "gamescope --backend=drm -W 1920 -H 1080 -w 1920 -h 1080 -r 120 --xwayland-count 1 "
-      "--expose-wayland --force-windows-fullscreen -O Virtual-2 --prefer-drm /dev/dri/card3 "
+      "gamescope --backend=drm -W 1920 -H 1080 -w 1920 -h 1080 -r 120 --prefer-drm /dev/dri/card3 "
+      "--xwayland-count 1 --expose-wayland --force-windows-fullscreen -O Virtual-2 "
       "-- steam -gamepadui"
     );
     EXPECT_EQ(
       launch_command(session(drm_selector_e::drm_device, false)),
-      "gamescope --backend=drm -W 1920 -H 1080 -w 1920 -h 1080 -r 120 --xwayland-count 1 "
-      "--expose-wayland --force-windows-fullscreen -O Virtual-2 --drm-device /dev/dri/card3 "
+      "gamescope --backend=drm -W 1920 -H 1080 -w 1920 -h 1080 -r 120 --drm-device /dev/dri/card3 "
+      "--xwayland-count 1 --expose-wayland --force-windows-fullscreen -O Virtual-2 "
       "-- steam -gamepadui"
     );
   }
 
   TEST(GamescopeSession, SteamModeAddsSteamIntegrationAndASecondXwayland) {
     EXPECT_EQ(
-      launch_command(session(drm_selector_e::prefer_drm, true)),
-      "gamescope --backend=drm -W 1920 -H 1080 -w 1920 -h 1080 -r 120 --xwayland-count 2 "
-      "--expose-wayland --force-windows-fullscreen -O Virtual-2 --prefer-drm /dev/dri/card3 -e "
+      launch_command(session(drm_selector_e::drm_device, true)),
+      "gamescope --backend=drm -W 1920 -H 1080 -w 1920 -h 1080 -r 120 --drm-device /dev/dri/card3 "
+      "-e --xwayland-count 2 --expose-wayland --force-windows-fullscreen -O Virtual-2 "
+      "-- steam -gamepadui"
+    );
+  }
+
+  TEST(GamescopeSession, AppFlagsReplaceTheDefaultsAfterSteamMode) {
+    auto launch = session(drm_selector_e::drm_device, true);
+    launch.args = "--xwayland-count 1 --hdr-enabled";
+    EXPECT_EQ(
+      launch_command(launch),
+      "gamescope --backend=drm -W 1920 -H 1080 -w 1920 -h 1080 -r 120 --drm-device /dev/dri/card3 "
+      "-e --xwayland-count 2 --xwayland-count 1 --hdr-enabled -O Virtual-2 "
       "-- steam -gamepadui"
     );
   }
@@ -117,6 +129,17 @@ namespace {
       "gamescope --backend=drm -W 1920 -H 1080 -w 1920 -h 1080 -r 120 --xwayland-count 1 "
       "--expose-wayland --force-windows-fullscreen -- steam -gamepadui"
     );
+  }
+
+  TEST(GamescopeSession, SteamModeAutoFollowsTheProgram) {
+    EXPECT_TRUE(steam_mode_for("auto", "steam -gamepadui"));
+    EXPECT_TRUE(steam_mode_for("auto", "  /usr/bin/steam -gamepadui"));
+    EXPECT_TRUE(steam_mode_for("", "steam"));
+    EXPECT_FALSE(steam_mode_for("auto", "steamtinkerlaunch run"));
+    EXPECT_FALSE(steam_mode_for("auto", "env steam"));
+    EXPECT_FALSE(steam_mode_for("auto", ""));
+    EXPECT_TRUE(steam_mode_for("on", "heroic"));
+    EXPECT_FALSE(steam_mode_for("off", "steam -gamepadui"));
   }
 
   TEST(GamescopeSession, TheApplicationAlwaysComesAfterTheSeparator) {
