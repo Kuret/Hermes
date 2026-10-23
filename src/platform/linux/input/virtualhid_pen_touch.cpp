@@ -54,7 +54,7 @@ namespace platf::virtualhid {
       profile.vendor_id = hermes_vendor;
       profile.product_id = hermes_product;
       profile.version = 0x111;
-      profile.name = session_tag.empty() ? display_name : "Hermes Session Input";
+      profile.name = display_name;
       profile.linux_phys = session_tag;
       return profile;
     }
@@ -80,7 +80,9 @@ namespace platf::virtualhid {
 
     lvh::CreateTouchscreenOptions touch_options;
     touch_options.profile = with_hermes_identity(lvh::profiles::touchscreen(),
-                                                 session_tag, "Hermes Virtual Touch");
+                                                 session_tag,
+                                                 session_tag.empty() ? VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME
+                                                                     : "Hermes Session Touch");
     touch_options.stable_id = session_tag + "-touch";
     auto created_touch = runtime->create_touchscreen(touch_options);
     if (created_touch) {
@@ -92,7 +94,9 @@ namespace platf::virtualhid {
 
     lvh::CreatePenTabletOptions pen_options;
     pen_options.profile = with_hermes_identity(lvh::profiles::pen_tablet(),
-                                               session_tag, "Hermes Virtual Pen");
+                                               session_tag,
+                                               session_tag.empty() ? VDISPLAY::VIRTUAL_PEN_DEVICE_NAME
+                                                                   : "Hermes Session Pen");
     pen_options.stable_id = session_tag + "-pen";
     auto created_pen = runtime->create_pen_tablet(pen_options);
     if (created_pen) {
