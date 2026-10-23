@@ -57,6 +57,7 @@ install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/session-compositors/
 
 if(${SUNSHINE_BUILD_APPIMAGE} OR ${SUNSHINE_BUILD_FLATPAK})
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.rules"
+            "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/74-hermes-session-acl.rules"
             "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/99-hermes-session-input.rules"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/udev/rules.d")
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.conf"
@@ -83,6 +84,7 @@ else()
 
     if(UDEV_FOUND)
         install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.rules"
+                "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/74-hermes-session-acl.rules"
                 "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/99-hermes-session-input.rules"
                 DESTINATION "${UDEV_RULES_INSTALL_DIR}")
     endif()

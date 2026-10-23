@@ -47,6 +47,7 @@ function install() {
   # user input rules
   # shellcheck disable=SC2002
   cat "$SUNSHINE_SHARE_HERE/udev/rules.d/60-hermes.rules" | sudo tee /etc/udev/rules.d/60-hermes.rules
+  cat "$SUNSHINE_SHARE_HERE/udev/rules.d/74-hermes-session-acl.rules" | sudo tee /etc/udev/rules.d/74-hermes-session-acl.rules
   cat "$SUNSHINE_SHARE_HERE/modules-load.d/60-hermes.conf" | sudo tee /etc/modules-load.d/60-hermes.conf
   sudo modprobe uhid
   sudo udevadm control --reload-rules
@@ -65,7 +66,7 @@ function install() {
 
 function remove() {
   # remove input rules
-  sudo rm -f /etc/udev/rules.d/60-hermes.rules
+  sudo rm -f /etc/udev/rules.d/60-hermes.rules /etc/udev/rules.d/74-hermes-session-acl.rules
 
   # remove uhid module loading config
   sudo rm -f /etc/modules-load.d/60-hermes.conf

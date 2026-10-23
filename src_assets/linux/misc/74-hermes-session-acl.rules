@@ -1,0 +1,4 @@
+# After 73-seat-late.rules: uaccess clears ACLs on a seat with no active
+# session, which is every hermes-kms-N seat 60-hermes.rules assigns. Apps in the
+# session (Steam reading gamepads) run as the Hermes-KMS session user.
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event*|js*", ENV{ID_SEAT}=="hermes-kms-[1-8]", RUN+="/bin/sh -c 'uid=$$(cat /etc/hermes-kms/session-user) && exec setfacl -m u:$$uid:rw $env{DEVNAME}'"
