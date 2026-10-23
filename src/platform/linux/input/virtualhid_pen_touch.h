@@ -28,6 +28,7 @@ namespace platf::virtualhid {
     // Both sets/states are per-client, never shared across streams.
     std::unordered_set<std::int32_t> active_contacts;
     bool pen_touching = false;
+    std::uint8_t pen_buttons = 0;
   };
 
   void touch_update(client_devices_t &devices, const touch_port_t &port, const touch_input_t &touch);
