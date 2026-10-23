@@ -52,6 +52,26 @@ the ownership regression establishes hardware correctness or performance.
 Real-host checks still need SDR/HDR, padded pitches, resize, repeated
 reconnection, multi-client teardown, and a game near GPU saturation.
 
-The next decisive experiment is a real NVIDIA-allocated BO imported into
-Hermes-KMS and sampled back on that NVIDIA device. Then investigate compositor
-passthrough, selected-device propagation, import caching and direct YUV output.
+## GPU-origin producer now available
+
+The matching Hermes-KMS experimental branch includes
+`tools/hermes-gpu-scanout-test/hermes-gpu-scanout-test`. It allocates a modified
+GBM BO on an explicit GPU, renders a page-varying pattern without CPU pixel
+upload, imports it into an unused Hermes-KMS card, and requires capture to
+return the original DMA-BUF identity and layout. It checks every source and
+returned pixel, including the suffix beyond 2 MiB, and performs real GL/EGL
+teardown. It does not change the compositor or Hermes capture defaults.
+
+Follow the [producer's build/run instructions](https://github.com/MrOz59/Hermes-KMS/blob/experimental/nvidia-zero-copy/tools/hermes-gpu-scanout-test/README.md).
+Its `--hold-seconds` and private `--session-file` let the CUDA-enabled
+`hermes-egl-import-check --no-cpu-ref --full-teardown` inspect the same static
+GPU-origin source. Use the same explicit NVIDIA render node for both. The
+producer owns the output; do not launch another compositor that tries to own
+that card while this diagnostic is running.
+
+Passing the producer establishes storage passthrough and known-pattern pixel
+correctness. Passing the CUDA checker adds GL/CUDA image and lifecycle checks.
+Neither proves physical VRAM residency, NVENC encode/decode or KWin's choice
+of scanout allocation. Hardware results are still pending. The next runtime
+steps are compositor passthrough, selected-device propagation, import caching
+and direct YUV output after the GPU-origin experiment passes on the real host.
