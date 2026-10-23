@@ -221,6 +221,9 @@ namespace input {
 
     int32_t accumulated_vscroll_delta;
     int32_t accumulated_hscroll_delta;
+
+    // Moves of the client's connect-time wiggle still to drop (isolated only).
+    int wake_wiggle_left = 0;
   };
 
   /**
@@ -474,8 +477,22 @@ namespace input {
       return;
     }
 
+    const auto dx = util::endian::big(packet->deltaX);
+    const auto dy = util::endian::big(packet->deltaY);
+
+    // moonlight-common-c wiggles the mouse (+1,+1 then -1,-1) right after
+    // connecting to wake the display. In gamescope that shows the cursor.
+    if (input->wake_wiggle_left) {
+      const int step = input->wake_wiggle_left == 2 ? 1 : -1;
+      if (dx == step && dy == step) {
+        --input->wake_wiggle_left;
+        return;
+      }
+      input->wake_wiggle_left = 0;
+    }
+
     input->mouse_left_button_timeout = DISABLE_LEFT_BUTTON_DELAY;
-    platf::move_mouse(*input->platform_input, util::endian::big(packet->deltaX), util::endian::big(packet->deltaY));
+    platf::move_mouse(*input->platform_input, dx, dy);
   }
 
   /**
@@ -1798,7 +1815,10 @@ namespace input {
     // changes, so there is nothing to wake. And the nudge is real input on the
     // session's own seat, which Gamescope answers by showing its cursor in the
     // middle of Steam's gamepad UI before the client has moved anything (#57).
-    if (session_tag.empty()) {
+    // The client's own connect-time wiggle is dropped for the same reason.
+    if (!session_tag.empty()) {
+      input->wake_wiggle_left = config::input.isolated_ignore_mouse_wiggle ? 2 : 0;
+    } else {
       task_pool.pushDelayed([input]() {
         platf::move_mouse(*input->platform_input, 1, 1);
         platf::move_mouse(*input->platform_input, -1, -1);

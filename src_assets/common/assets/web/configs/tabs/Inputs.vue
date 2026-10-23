@@ -194,6 +194,15 @@ const config = ref(props.config)
               default="true"
     ></Checkbox>
 
+    <!-- Ignore the client's connect-time mouse wiggle in isolated sessions -->
+    <Checkbox v-if="config.mouse === 'enabled'"
+              class="mb-3"
+              id="isolated_ignore_mouse_wiggle"
+              locale-prefix="config"
+              v-model="config.isolated_ignore_mouse_wiggle"
+              default="true"
+    ></Checkbox>
+
     <!-- Enable Input Only Mode -->
     <hr>
     <Checkbox class="mb-3"

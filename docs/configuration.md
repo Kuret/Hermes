@@ -829,6 +829,31 @@ alias; new configurations should use the key above.
     </tr>
 </table>
 
+### isolated_ignore_mouse_wiggle
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Moonlight-based clients move the mouse by one pixel and back right after connecting to wake the host
+            display. In an isolated gamescope session that is real motion and shows the cursor until the app hides it.
+            When enabled, Hermes drops that +1,+1 / -1,-1 move if it is the first mouse input of an isolated session.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            isolated_ignore_mouse_wiggle = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### high_resolution_scrolling
 
 <table>
