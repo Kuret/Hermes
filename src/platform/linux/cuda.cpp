@@ -332,7 +332,12 @@ namespace cuda {
       // The next upload uses the same event and texture. Retire the previous
       // source first; its upload normally completed while NVENC was encoding.
       auto wait = [&] {
-        return !check(cdf->cuEventSynchronize(upload_done.get()), "Couldn't wait for CUDA upload: "sv);
+        // An upload whose event could not be recorded must never be retired
+        // against a stale, already-signalled event from an older frame.
+        const auto result = upload_event_recorded ?
+                              cdf->cuEventSynchronize(upload_done.get()) :
+                              cdf->cuStreamSynchronize(stream.get());
+        return !check(result, "Couldn't wait for CUDA upload: "sv);
       };
       if (!pending_upload.finish(wait)) {
         return -1;
@@ -348,6 +353,7 @@ namespace cuda {
       if (!pending_upload.begin(std::move(source), wait)) {
         return -1;
       }
+      upload_event_recorded = false;
       const auto drain_failed_submission = [&] {
         // The event may not have been recorded, so waiting on it would refer
         // to an older frame. Retain this source until the stream is drained.
@@ -362,6 +368,7 @@ namespace cuda {
       if (check(cdf->cuEventRecord(upload_done.get(), stream.get()), "Couldn't record CUDA upload completion: "sv)) {
         return drain_failed_submission();
       }
+      upload_event_recorded = true;
       // Release can happen after the upload, without waiting for conversion:
       // the kernel reads the private CUDA array, never the capture-pool frame.
       return sws.convert(frame->data[0], frame->data[1], frame->linesize[0], frame->linesize[1], tex_obj(tex), stream.get());
@@ -395,6 +402,7 @@ namespace cuda {
     upload_event_t upload_done;
     upload_lifetime_t<platf::img_t> pending_upload;
     bool async_upload {true};
+    bool upload_event_recorded {false};
   };
 
   class cuda_vram_t: public cuda_t {
