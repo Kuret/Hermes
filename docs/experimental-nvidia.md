@@ -64,7 +64,7 @@ teardown. It does not change the compositor or Hermes capture defaults.
 
 Follow the [producer's build/run instructions](https://github.com/MrOz59/Hermes-KMS/blob/experimental/nvidia-zero-copy/tools/hermes-gpu-scanout-test/README.md).
 Its `--hold-seconds` and private `--session-file` let the CUDA-enabled
-`hermes-egl-import-check --no-cpu-ref --full-teardown` inspect the same static
+`hermes-egl-import-check --expect-gpu-pattern --full-teardown` inspect the same static
 GPU-origin source. Use the same explicit NVIDIA render node for both. The
 producer owns the output; do not launch another compositor that tries to own
 that card while this diagnostic is running.
