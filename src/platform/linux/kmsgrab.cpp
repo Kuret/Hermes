@@ -2996,16 +2996,27 @@ namespace platf {
       // measured on hardware that does not need it.
       const char *force_cpu_copy = std::getenv("HERMES_KMS_FORCE_CPU_COPY");
       const bool forced_cpu_copy = force_cpu_copy && !std::strcmp(force_cpu_copy, "1");
+      const char *experimental_dmabuf = std::getenv("HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF");
+      const bool try_nvenc_dmabuf = hwdevice_type == mem_type_e::cuda &&
+                                   experimental_dmabuf && !std::strcmp(experimental_dmabuf, "1") &&
+                                   !forced_cpu_copy;
       if (forced_cpu_copy && hwdevice_type != mem_type_e::cuda) {
         BOOST_LOG(warning) << "HERMES_KMS_FORCE_CPU_COPY=1: using the CPU-copy capture path instead of zero-copy."sv;
       }
-      if (hwdevice_type == mem_type_e::cuda || forced_cpu_copy) {
+      if ((hwdevice_type == mem_type_e::cuda && !try_nvenc_dmabuf) || forced_cpu_copy) {
         auto disp = std::make_shared<kms::display_hermes_ram_t>(hwdevice_type);
         if (!disp->init(display_name, config)) {
           return disp;
         }
         BOOST_LOG(error) << "Hermes-KMS CPU-copy capture failed; refusing physical-display fallback."sv;
         return nullptr;
+      }
+
+      if (try_nvenc_dmabuf) {
+        BOOST_LOG(warning) << "EXPERIMENTAL: Hermes-KMS NVENC DMA-BUF import explicitly enabled. "sv
+                           << "Unvalidated NVIDIA imports can corrupt pixels or crash the driver; "sv
+                           << "use the full-frame Hermes-KMS checker first. CUDA currently uses device 0. "sv
+                           << "Unset HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF to restore CPU-copy capture."sv;
       }
 
       auto disp = std::make_shared<kms::display_hermes_vram_t>(hwdevice_type);

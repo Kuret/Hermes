@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <bitset>
+#include <cstdlib>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <filesystem>
@@ -22,6 +23,7 @@ extern "C" {
 
 // local includes
 #include "cuda.h"
+#include "cuda_upload_lifetime.h"
 #include "graphics.h"
 #include "src/logging.h"
 #include "src/utility.h"
@@ -82,6 +84,12 @@ namespace cuda {
   }
 
   using registered_resource_t = util::safe_ptr<CUgraphicsResource_st, unregisterResource>;
+
+  void destroyUploadEvent(CUevent event) {
+    CU_CHECK_IGNORE(cdf->cuEventDestroy(event), "Couldn't destroy upload completion event");
+  }
+
+  using upload_event_t = util::safe_ptr<CUevent_st, destroyUploadEvent>;
 
   class img_t: public platf::img_t {
   public:
@@ -311,8 +319,52 @@ namespace cuda {
 
   class cuda_ram_t: public cuda_t {
   public:
+    ~cuda_ram_t() override {
+      // Drain both the upload and the conversion before their source/array,
+      // completion event and stream are destroyed, including error teardown.
+      if (stream) {
+        CU_CHECK_IGNORE(cdf->cuStreamSynchronize(stream.get()), "Couldn't drain CUDA upload/conversion during teardown");
+      }
+      pending_upload.finish([] { return true; });
+    }
+
     int convert(platf::img_t &img) override {
-      return sws.load_ram(img, tex.array) || sws.convert(frame->data[0], frame->data[1], frame->linesize[0], frame->linesize[1], tex_obj(tex), stream.get());
+      // The next upload uses the same event and texture. Retire the previous
+      // source first; its upload normally completed while NVENC was encoding.
+      auto wait = [&] {
+        return !check(cdf->cuEventSynchronize(upload_done.get()), "Couldn't wait for CUDA upload: "sv);
+      };
+      if (!pending_upload.finish(wait)) {
+        return -1;
+      }
+
+      auto source = img.weak_from_this().lock();
+      if (!async_upload || !source) {
+        // Probes/dummy images can live on the stack. Without a shared owner
+        // they cannot outlive this call, so keep the synchronous upload.
+        return sws.load_ram(img, tex.array) || sws.convert(frame->data[0], frame->data[1], frame->linesize[0], frame->linesize[1], tex_obj(tex), stream.get());
+      }
+
+      if (!pending_upload.begin(std::move(source), wait)) {
+        return -1;
+      }
+      const auto drain_failed_submission = [&] {
+        // The event may not have been recorded, so waiting on it would refer
+        // to an older frame. Retain this source until the stream is drained.
+        pending_upload.finish([&] {
+          return !check(cdf->cuStreamSynchronize(stream.get()), "Couldn't drain failed CUDA upload: "sv);
+        });
+        return -1;
+      };
+      if (sws.load_ram(img, tex.array, stream.get())) {
+        return drain_failed_submission();
+      }
+      if (check(cdf->cuEventRecord(upload_done.get(), stream.get()), "Couldn't record CUDA upload completion: "sv)) {
+        return drain_failed_submission();
+      }
+      // Release can happen after the upload, without waiting for conversion:
+      // the kernel reads the private CUDA array, never the capture-pool frame.
+      return sws.convert(frame->data[0], frame->data[1], frame->linesize[0], frame->linesize[1], tex_obj(tex), stream.get());
     }
 
     int set_frame(AVFrame *frame, AVBufferRef *hw_frames_ctx) override {
@@ -327,10 +379,22 @@ namespace cuda {
 
       tex = std::move(*tex_opt);
 
+      const char *async_setting = std::getenv("HERMES_CUDA_ASYNC_UPLOAD");
+      async_upload = !async_setting || std::string_view {async_setting} != "0"sv;
+      if (async_upload) {
+        CUevent event;
+        CU_CHECK(cdf->cuEventCreate(&event, CU_EVENT_DISABLE_TIMING), "Couldn't create upload completion event");
+        upload_done.reset(event);
+      }
+      BOOST_LOG(info) << "CUDA host upload: "sv << (async_upload ? "asynchronous (frame lease + completion event)"sv : "synchronous (HERMES_CUDA_ASYNC_UPLOAD=0)"sv);
+
       return 0;
     }
 
     tex_t tex;
+    upload_event_t upload_done;
+    upload_lifetime_t<platf::img_t> pending_upload;
+    bool async_upload {true};
   };
 
   class cuda_vram_t: public cuda_t {
