@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Only the newest experimental commit needs a full compiler matrix.
+concurrency:
+  group: hermes-libvirtualhid-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   linux:
     runs-on: ubuntu-latest
