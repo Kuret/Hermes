@@ -31,7 +31,7 @@ namespace platf::virtualhid {
       return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
     }
 
-    int orientation(short rotation) {
+    int orientation(std::uint16_t rotation) {
       if (rotation == LI_ROT_UNKNOWN) {
         return 0;
       }
