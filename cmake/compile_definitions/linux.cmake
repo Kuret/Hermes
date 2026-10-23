@@ -288,11 +288,46 @@ endif()
 set(LIBEVDEV_CUSTOM_INCLUDE_DIR "${EVDEV_INCLUDE_DIR}")
 set(LIBEVDEV_CUSTOM_LIBRARY "${EVDEV_LIBRARY}")
 
+# Experimental migration to our own libvirtualhid fork. This first
+# milestone migrates pen and touchscreen, while inputtino still handles
+# mouse, keyboard and gamepads. Keep this switch for A/B testing.
+option(HERMES_LVH_PEN_TOUCH
+        "Use MrOz59/libvirtualhid instead of inputtino for Linux pen and touch" ON)
+
 add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/inputtino")
 list(APPEND SUNSHINE_EXTERNAL_LIBRARIES inputtino::libinputtino)
 file(GLOB_RECURSE INPUTTINO_SOURCES
         ${CMAKE_SOURCE_DIR}/src/platform/linux/input/inputtino*.h
         ${CMAKE_SOURCE_DIR}/src/platform/linux/input/inputtino*.cpp)
+
+if(HERMES_LVH_PEN_TOUCH)
+    include(FetchContent)
+
+    # Never use the upstream LizardByte repository here. This commit is from
+    # MrOz59/libvirtualhid (master), with Linux pen/touch support.
+    set(BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(LIBVIRTUALHID_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(LIBVIRTUALHID_INSTALL OFF CACHE BOOL "" FORCE)
+    set(LIBVIRTUALHID_ENABLE_PACKAGING OFF CACHE BOOL "" FORCE)
+
+    FetchContent_Declare(hermes_libvirtualhid
+            GIT_REPOSITORY https://github.com/MrOz59/libvirtualhid.git
+            GIT_TAG 439579c38180f9dad7c5324da195374cdbd325b4
+            GIT_SHALLOW FALSE)
+    FetchContent_MakeAvailable(hermes_libvirtualhid)
+    list(APPEND SUNSHINE_EXTERNAL_LIBRARIES libvirtualhid::libvirtualhid)
+    add_compile_definitions(HERMES_LVH_PEN_TOUCH=1)
+
+    # Remove legacy implementations so the same callbacks are never mapped
+    # through both virtual-input libraries.
+    list(FILTER INPUTTINO_SOURCES EXCLUDE REGEX "/inputtino_(pen|touch)\\.cpp$")
+    list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/input/virtualhid_pen_touch.h"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/input/virtualhid_pen_touch.cpp")
+    message(STATUS "Hermes experimental pen/touch backend: MrOz59/libvirtualhid")
+endif()
 list(APPEND PLATFORM_TARGET_FILES ${INPUTTINO_SOURCES})
 
 # build libevdev before the libinputtino target
