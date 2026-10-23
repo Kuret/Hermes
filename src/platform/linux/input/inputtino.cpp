@@ -71,12 +71,24 @@ namespace platf {
 
   void touch_update(client_input_t *input, const touch_port_t &touch_port, const touch_input_t &touch) {
     auto raw = (client_input_raw_t *) input;
+#ifdef HERMES_LVH_PEN_TOUCH
+    if (raw->virtualhid_devices) {
+      virtualhid::touch_update(*raw->virtualhid_devices, touch_port, touch);
+    }
+#else
     platf::touch::update(raw, touch_port, touch);
+#endif
   }
 
   void pen_update(client_input_t *input, const touch_port_t &touch_port, const pen_input_t &pen) {
     auto raw = (client_input_raw_t *) input;
+#ifdef HERMES_LVH_PEN_TOUCH
+    if (raw->virtualhid_devices) {
+      virtualhid::pen_update(*raw->virtualhid_devices, touch_port, pen);
+    }
+#else
     platf::pen::update(raw, touch_port, pen);
+#endif
   }
 
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
