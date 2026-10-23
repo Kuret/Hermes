@@ -11,6 +11,7 @@
 #include <string>
 
 #include "src/logging.h"
+#include "src/platform/linux/virtual_display.h"
 
 namespace platf::virtualhid {
   namespace {
