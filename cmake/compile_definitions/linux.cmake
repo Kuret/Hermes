@@ -305,8 +305,13 @@ if(HERMES_LVH_PEN_TOUCH)
 
     # Never use the upstream LizardByte repository here. This commit is from
     # MrOz59/libvirtualhid (master), with Linux pen/touch support.
-    set(BUILD_DOCS OFF CACHE BOOL "" FORCE)
-    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    # libvirtualhid uses generic BUILD_TESTS/BUILD_DOCS options too. Limit
+    # these overrides to its subproject: Hermes' own test suite must not be
+    # silently disabled as a side effect of enabling the HID backend.
+    set(_hermes_saved_build_tests "${BUILD_TESTS}")
+    set(_hermes_saved_build_docs "${BUILD_DOCS}")
+    set(BUILD_TESTS OFF)
+    set(BUILD_DOCS OFF)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(LIBVIRTUALHID_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
     set(LIBVIRTUALHID_INSTALL OFF CACHE BOOL "" FORCE)
@@ -317,6 +322,10 @@ if(HERMES_LVH_PEN_TOUCH)
             GIT_TAG 439579c38180f9dad7c5324da195374cdbd325b4
             GIT_SHALLOW FALSE)
     FetchContent_MakeAvailable(hermes_libvirtualhid)
+    set(BUILD_TESTS "${_hermes_saved_build_tests}")
+    set(BUILD_DOCS "${_hermes_saved_build_docs}")
+    unset(_hermes_saved_build_tests)
+    unset(_hermes_saved_build_docs)
     list(APPEND SUNSHINE_EXTERNAL_LIBRARIES libvirtualhid::libvirtualhid)
     add_compile_definitions(HERMES_LVH_PEN_TOUCH=1)
 
