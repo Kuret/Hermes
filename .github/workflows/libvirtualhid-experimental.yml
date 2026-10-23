@@ -1,0 +1,53 @@
+name: Experimental libvirtualhid Linux input
+
+on:
+  push:
+    branches:
+      - experimental/libvirtualhid-input
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        lvh_pen_touch: [ON, OFF]
+    name: Linux input (libvirtualhid ${{ matrix.lvh_pen_touch }})
+    steps:
+      - name: Install Linux build dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            base-devel git cmake ninja boost openssl opus ffmpeg \
+            libdrm wayland libx11 libxrandr libxfixes libxcb \
+            libva libvdpau libcap curl libevdev systemd \
+            miniupnpc libpulse qt6-base qt6-svg npm nodejs \
+            icu numactl
+
+      - name: Checkout Hermes
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Allow checkout path
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Configure with requested input backend
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSUNSHINE_ENABLE_WAYLAND=ON \
+            -DSUNSHINE_ENABLE_X11=ON \
+            -DSUNSHINE_ENABLE_DRM=ON \
+            -DSUNSHINE_ENABLE_CUDA=OFF \
+            -DBUILD_TESTS=OFF \
+            -DHERMES_LVH_PEN_TOUCH=${{ matrix.lvh_pen_touch }}
+
+      - name: Compile Hermes
+        run: cmake --build build --target sunshine -j2
