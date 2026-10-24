@@ -40,6 +40,11 @@ namespace platf::gamepad {
       std::pair {"switch"sv, controller_type::switch_pro},
     };
 
+    bool supports_input_events(lvh::GamepadProfileKind kind) {
+      using enum lvh::GamepadProfileKind;
+      return kind == generic || kind == xbox_360 || kind == xbox_one || kind == xbox_series;
+    }
+
     bool valid_index(const input_raw_t *raw, int index) {
       return raw && index >= 0 && static_cast<std::size_t>(index) < raw->gamepads.size();
     }
@@ -83,6 +88,10 @@ namespace platf::gamepad {
           BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will use " << name << " (manual selection)";
           return type;
         }
+      }
+      if (config::input.linux_gamepad_backend == "uinput"sv) {
+        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will use Xbox Series (automatic input-event policy)";
+        return controller_type::xbox_series;
       }
       if (metadata.type == LI_CTYPE_XBOX) {
         BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox Series controller (client type)";
@@ -193,6 +202,7 @@ namespace platf::gamepad {
     lvh::CreateGamepadOptions creation_options(controller_type type, const gamepad_id_t &id, const gamepad_arrival_t &metadata, const std::string &session_tag) {
       lvh::CreateGamepadOptions options;
       options.profile = profile_for(type, session_tag);
+      options.prefer_input_events = prefer_input_events(options.profile.gamepad_kind);
       options.metadata.global_index = id.globalIndex;
       options.metadata.client_relative_index = id.clientRelativeIndex;
       options.metadata.client_type = client_type(metadata.type);
@@ -302,9 +312,14 @@ namespace platf::gamepad {
     }
 
     const auto type = select_type(id, metadata);
+    const auto options = creation_options(type, id, metadata, raw->session_tag);
+    if (options.prefer_input_events && !supports_input_events(options.profile.gamepad_kind)) {
+      BOOST_LOG(warning) << "Selected gamepad profile requires native HID; choose the native or auto backend policy";
+      return -1;
+    }
     auto created = lvh::GamepadStateAdapter::create(
       *raw->runtime,
-      creation_options(type, id, metadata, raw->session_tag)
+      options
     );
     if (!created) {
       BOOST_LOG(warning) << "Unable to create virtual gamepad " << id.globalIndex << ": "
@@ -506,7 +521,17 @@ namespace platf::gamepad {
     virtualhid::log_failure("gamepad battery", gamepad->adapter->set_state(state));
   }
 
+  bool prefer_input_events(lvh::GamepadProfileKind kind) {
+    if (config::input.linux_gamepad_backend == "native"sv) {
+      return false;
+    }
+    return config::input.linux_gamepad_backend == "uinput"sv || supports_input_events(kind);
+  }
+
   bool supports_controller_extensions() {
+    if (config::input.linux_gamepad_backend == "uinput"sv) {
+      return false;
+    }
     if (config::input.gamepad == "auto"sv) {
       return true;
     }
@@ -542,9 +567,13 @@ namespace platf::gamepad {
     const gamepad_id_t probe_id {.globalIndex = MAX_GAMEPADS - 1, .clientRelativeIndex = 0};
     const gamepad_arrival_t probe_metadata {.type = LI_CTYPE_UNKNOWN, .capabilities = 0, .supportedButtons = 0};
     for (std::size_t index = 0; index < controller_profiles.size(); ++index) {
-      auto created = raw->runtime->create_gamepad(
-        creation_options(controller_profiles[index].second, probe_id, probe_metadata, raw->session_tag)
-      );
+      const auto request = creation_options(controller_profiles[index].second, probe_id, probe_metadata, raw->session_tag);
+      if (request.prefer_input_events && !supports_input_events(request.profile.gamepad_kind)) {
+        options[index + 1].is_enabled = false;
+        options[index + 1].reason_disabled = "This profile requires native HID; change the Linux gamepad backend policy";
+        continue;
+      }
+      auto created = raw->runtime->create_gamepad(request);
       options[index + 1].is_enabled = static_cast<bool>(created);
       options[index + 1].reason_disabled = created ? "" : created.status.message();
       if (!created) {

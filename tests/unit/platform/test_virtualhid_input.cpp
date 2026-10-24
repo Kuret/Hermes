@@ -28,6 +28,7 @@
   #include <sys/ioctl.h>
   #include <sys/stat.h>
   #include <sys/sysmacros.h>
+  #include <sys/wait.h>
   #include <thread>
   #include <unistd.h>
 
@@ -48,6 +49,7 @@ namespace {
 
     void SetUp() override {
       config::input.gamepad = "ds5";
+      config::input.linux_gamepad_backend = "native";
       config::input.virtualhid_randomize_mac = false;
       config::input.mouse = true;
       config::input.keyboard = true;
@@ -207,6 +209,27 @@ namespace {
     EXPECT_EQ(select("auto", LI_CTYPE_UNKNOWN, LI_CCAP_GYRO | LI_CCAP_TOUCHPAD), lvh::GamepadProfileKind::xbox_series);
     EXPECT_EQ(select("xone", LI_CTYPE_PS, LI_CCAP_GYRO), lvh::GamepadProfileKind::xbox_one);
     EXPECT_EQ(select("ds4", LI_CTYPE_XBOX, 0), lvh::GamepadProfileKind::dualshock4);
+  }
+
+  TEST_F(VirtualHidInputTest, AutomaticBackendPreservesEventDeviceRumbleAndNativeIsExplicit) {
+    config::input.linux_gamepad_backend = "auto";
+    for (const auto kind : {lvh::GamepadProfileKind::generic, lvh::GamepadProfileKind::xbox_360, lvh::GamepadProfileKind::xbox_one, lvh::GamepadProfileKind::xbox_series}) {
+      EXPECT_TRUE(platf::gamepad::prefer_input_events(kind));
+    }
+    for (const auto kind : {lvh::GamepadProfileKind::dualshock4, lvh::GamepadProfileKind::dualsense, lvh::GamepadProfileKind::switch_pro}) {
+      EXPECT_FALSE(platf::gamepad::prefer_input_events(kind));
+    }
+    config::input.linux_gamepad_backend = "native";
+    EXPECT_FALSE(platf::gamepad::prefer_input_events(lvh::GamepadProfileKind::xbox_series));
+    config::input.linux_gamepad_backend = "uinput";
+    config::input.gamepad = "auto";
+    platf::input_raw_t raw {"hermes-kms-1", fake_runtime()};
+    ASSERT_EQ(platf::gamepad::alloc(&raw, {0, 0}, {.type = LI_CTYPE_PS, .capabilities = LI_CCAP_GYRO}, feedback), 0);
+    EXPECT_EQ(raw.gamepads[0]->adapter->gamepad()->profile().gamepad_kind, lvh::GamepadProfileKind::xbox_series);
+    EXPECT_FALSE(platf::gamepad::supports_controller_extensions());
+    platf::gamepad::free(&raw, 0);
+    config::input.gamepad = "ds5";
+    EXPECT_EQ(platf::gamepad::alloc(&raw, {0, 0}, {}, feedback), -1);
   }
 
   TEST_F(VirtualHidInputTest, EveryManualProfileIsExposedWithoutLeavingProbeDevices) {
@@ -630,6 +653,7 @@ namespace {
   };
 
   class VirtualHidKernelTest: public VirtualHidInputTest, public testing::WithParamInterface<const char *> {
+  protected:
     void SetUp() override {
       VirtualHidInputTest::SetUp();
       if (!std::getenv("HERMES_TEST_KERNEL_INPUT")) {
@@ -637,6 +661,81 @@ namespace {
       }
     }
   };
+
+  class VirtualHidEventKernelTest: public VirtualHidKernelTest {};
+
+  TEST_P(VirtualHidEventKernelTest, AutomaticXboxRumbleWorksForOnlyTheAuthorizedUidWithoutHidraw) {
+  #ifndef HERMES_TEST_HID_CONSUMER
+    GTEST_SKIP() << "Build tests with SDL2 >= 2.24 for the unprivileged SDL consumer";
+  #else
+    ASSERT_EQ(::geteuid(), 0);
+    config::input.gamepad = GetParam();
+    config::input.linux_gamepad_backend = "auto";
+    auto one = platf::input("hermes-kms-91");
+    auto two = platf::input("hermes-kms-92");
+    auto other_feedback = mailbox->queue<platf::gamepad_feedback_msg_t>("foreign-feedback");
+    ASSERT_EQ(platf::alloc_gamepad(one, {0, 3}, {}, feedback), 0);
+    ASSERT_EQ(platf::alloc_gamepad(two, {0, 7}, {}, other_feedback), 0);
+    ASSERT_EQ(std::system("udevadm settle --timeout=15"), 0);
+    auto *first = static_cast<platf::input_raw_t *>(one.get());
+    auto *second = static_cast<platf::input_raw_t *>(two.get());
+    EXPECT_FALSE(first->gamepads[0]->adapter->support().supports_trigger_rumble);
+    EXPECT_FALSE(first->gamepads[0]->adapter->support().supports_battery);
+    const auto event_path = [](platf::input_raw_t *raw) {
+      std::string path;
+      for (int attempt = 0; attempt < 150 && path.empty(); ++attempt) {
+        for (const auto &node : raw->gamepads[0]->adapter->gamepad()->device_nodes()) {
+          EXPECT_NE(node.kind, lvh::DeviceNodeKind::hidraw);
+          if (node.kind == lvh::DeviceNodeKind::input_event) {
+            path = node.path;
+          }
+        }
+        if (path.empty()) {
+          std::this_thread::sleep_for(20ms);
+        }
+      }
+      return path;
+    };
+    const auto own = event_path(first);
+    const auto foreign = event_path(second);
+    ASSERT_FALSE(own.empty());
+    ASSERT_FALSE(foreign.empty());
+    const auto run = [](std::vector<std::string> arguments) {
+      std::vector<char *> raw;
+      for (auto &argument : arguments) {
+        raw.push_back(argument.data());
+      }
+      raw.push_back(nullptr);
+      const auto child = ::fork();
+      if (child == 0) {
+        ::execv(raw.front(), raw.data());
+        ::_exit(127);
+      }
+      if (child < 0) {
+        return -1;
+      }
+      int status = 0;
+      while (::waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) {
+          return -1;
+        }
+      }
+      return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    };
+    ASSERT_EQ(run({"/usr/bin/setfacl", "-m", "u:65534:rw", "--", own}), 0);
+    ASSERT_EQ(run({"/usr/bin/setfacl", "-m", "u:65533:rw", "--", foreign}), 0);
+    ASSERT_EQ(run({"/usr/bin/setpriv", "--reuid=65534", "--regid=65534", "--clear-groups", HERMES_TEST_HID_CONSUMER, own, foreign}), 0);
+    bool observed_rumble = false;
+    while (const auto message = feedback->pop(50ms)) {
+      if (message->type == platf::gamepad_feedback_e::rumble && message->data.rumble.lowfreq == 0x1234 && message->data.rumble.highfreq == 0x5678) {
+        EXPECT_EQ(message->id, 3);
+        observed_rumble = true;
+      }
+    }
+    EXPECT_TRUE(observed_rumble);
+    EXPECT_FALSE(other_feedback->pop(20ms));
+  #endif
+  }
 
   TEST_P(VirtualHidKernelTest, PrivateSeatsRouteEventsAndTearDownIndependently) {
     config::input.gamepad = GetParam();
@@ -812,5 +911,6 @@ namespace {
   }
 
   INSTANTIATE_TEST_SUITE_P(ControllerProfiles, VirtualHidKernelTest, testing::Values("generic", "x360", "xone", "xseries", "ds4", "ds5", "switch"));
+  INSTANTIATE_TEST_SUITE_P(XboxEventProfiles, VirtualHidEventKernelTest, testing::Values("xone", "xseries"));
 }  // namespace
 #endif

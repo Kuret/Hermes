@@ -47,6 +47,19 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.gamepad_desc') }}</div>
     </div>
 
+    <div class="mb-3" v-if="platform === 'linux' && config.controller === 'enabled'">
+      <label for="linux_gamepad_backend" class="form-label">{{ $t('config.linux_gamepad_backend') }}</label>
+      <select id="linux_gamepad_backend" class="form-select" v-model="config.linux_gamepad_backend">
+        <option value="auto">{{ $t('_common.auto') }}</option>
+        <option value="native">{{ $t('config.linux_gamepad_backend_native') }}</option>
+        <option value="uinput">{{ $t('config.linux_gamepad_backend_uinput') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.linux_gamepad_backend_desc') }}</div>
+      <div class="form-text text-warning" v-if="config.linux_gamepad_backend === 'uinput' && ['ds4', 'ds5', 'switch'].includes(config.gamepad)">
+        {{ $t('config.linux_gamepad_backend_conflict') }}
+      </div>
+    </div>
+
     <!-- Additional options based on gamepad type -->
     <template v-if="config.controller === 'enabled'">
       <template v-if="config.gamepad === 'ds4' || config.gamepad === 'ds5' || (config.gamepad === 'auto' && platform !== 'macos')">

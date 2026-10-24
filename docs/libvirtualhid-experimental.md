@@ -8,7 +8,7 @@ compiled or linked.
 
 The dependency is our fork,
 [MrOz59/libvirtualhid](https://github.com/MrOz59/libvirtualhid), pinned by CMake
-to commit `38904f3f251c6387b4c77de54eb9ce2fc1e67bdf`. Updating the dependency
+to commit `1831bc0d5b43b23ba694d397c8a9d4900186521c`. Updating the dependency
 requires reviewing and intentionally changing that SHA.
 
 The library uses C++23, Linux `uinput`/`uhid`, and libevdev. Hermes needs read
@@ -41,6 +41,12 @@ auto`, PlayStation, Nintendo and Xbox client types select DualSense, Switch Pro
 and Xbox Series respectively. For an unknown client type, `motion_as_ds4` and
 `touchpad_as_ds4` can select DualSense; otherwise Xbox Series is used. A manual
 profile always overrides this detection. `xone` remains available explicitly.
+`linux_gamepad_backend = auto` uses uinput for generic/Xbox controllers,
+preserving ordinary rumble without requiring games to open hidraw. PlayStation
+and Switch retain native HID. Choose `native` explicitly for Xbox trigger rumble
+and battery, with appropriately restricted hidraw access for the consuming game.
+The `uinput` policy restricts automatic selection to Xbox Series and rejects
+manual PlayStation/Switch profiles; it does not silently change a manual profile.
 Back/Select can click the virtual DS4/DS5 touchpad using
 `ds4_back_as_touchpad_click`. `virtualhid_randomize_mac` controls both
 PlayStation profiles and accepts the two older DS5-specific configuration keys.
@@ -100,6 +106,14 @@ The branch workflow compiles Hermes and runs the library's identity/discovery,
 UHID round-trip and fail-closed isolation tests. On a host with uinput/uhid,
 the library consumer suite also verifies evdev, libinput, SDL, touchscreen,
 trackpad and tablet behavior.
+
+Pure unit tests run without kernel device prerequisites. A separate disposable
+runner job loads uinput/uhid and runs the real-device smoke tests, per-seat
+routing tests and an SDL consumer under an unprivileged UID. That consumer
+requires an ACL for its own event node, rejects access to the foreign seat,
+and must produce ordinary rumble without any hidraw node. The test grants ACLs
+only inside the disposable guest; it does not prove broker provisioning of
+those ACLs in production.
 
 SDL versions can expose Xbox directional inputs as raw buttons or a hat; the
 tests verify canonical button transitions independently of that layout. The

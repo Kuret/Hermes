@@ -1,9 +1,13 @@
 name: libvirtualhid Linux input
 
 on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
   push:
     branches:
       - experimental/libvirtualhid-input
+      - main
 
 permissions:
   contents: read
@@ -30,7 +34,7 @@ jobs:
             libxi libxtst libxss libxcursor libxkbcommon wayland-protocols \
             libva libvdpau libcap curl libevdev libinput sdl2 systemd \
             miniupnpc libpulse qt6-base qt6-svg npm nodejs \
-            icu numactl
+            icu numactl acl util-linux
 
       - name: Checkout Hermes
         uses: actions/checkout@v4
@@ -55,7 +59,7 @@ jobs:
 
       - name: Test Hermes input translation and per-client feedback
         working-directory: build/tests
-        run: ./test_sunshine --gtest_color=yes --gtest_filter='VirtualHidInputTest.*'
+        run: ./test_sunshine --gtest_color=yes --gtest_filter='VirtualHidInputTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*'
 
       - name: Configure pinned libvirtualhid tests
         run: |
@@ -76,4 +80,56 @@ jobs:
         run: |
           cmake-build-libvirtualhid-tests/tests/test_libvirtualhid \
             --gtest_color=yes \
-            --gtest_filter='-LinuxConsumerTest.*'
+            --gtest_filter='-LinuxConsumerTest.*:LinuxRuntimeTest.*'
+
+      # Kernel prerequisites are exercised in the dedicated job below, not
+      # asserted in this container without /dev/uinput or /dev/uhid.
+      - name: Upload kernel-test binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: libvirtualhid-linux-input-tests
+          path: |
+            build/tests/test_sunshine
+            build/tests/hermes-hid-consumer
+            cmake-build-libvirtualhid-tests/tests/test_libvirtualhid
+          if-no-files-found: error
+          retention-days: 3
+
+  kernel:
+    name: Kernel devices and unprivileged input access
+    needs: linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libvirtualhid-linux-input-tests
+      - name: Load the disposable runner's virtual input modules
+        run: |
+          sudo modprobe uinput
+          sudo modprobe uhid
+          for module in hid_playstation hid_nintendo hid_sony; do
+            sudo modprobe "$module" || echo "::notice::Optional HID driver $module is unavailable"
+          done
+      - name: Test real kernel devices, per-seat routing and non-root rumble
+        run: |
+          docker run --rm --privileged \
+            -v "$GITHUB_WORKSPACE:/__w/Hermes/Hermes" \
+            -v /lib/modules:/lib/modules:ro \
+            -w /__w/Hermes/Hermes \
+            -e GCOV_PREFIX=/tmp/hermes-test-coverage \
+            archlinux:latest bash -euo pipefail -c '
+              pacman -Syu --noconfirm
+              pacman -S --noconfirm --needed base-devel ffmpeg openssl opus libdrm \
+                wayland libx11 libxrandr libxfixes libxcb libva libvdpau libcap \
+                curl libevdev libinput sdl2 systemd miniupnpc libpulse qt6-base \
+                qt6-svg icu numactl acl util-linux kmod
+              chmod +x build/tests/test_sunshine build/tests/hermes-hid-consumer \
+                cmake-build-libvirtualhid-tests/tests/test_libvirtualhid
+              /usr/lib/systemd/systemd-udevd --daemon
+              scripts/vm-isolated-input-test.sh "$PWD/build/tests/test_sunshine"
+              cmake-build-libvirtualhid-tests/tests/test_libvirtualhid \
+                --gtest_color=yes \
+                --gtest_filter="LinuxRuntimeTest.*:LinuxConsumerTest.InputEventPreference*"
+            '

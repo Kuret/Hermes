@@ -527,6 +527,24 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### linux_gamepad_backend
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">Linux controller creation policy. Auto preserves ordinary evdev rumble
+            without hidraw access for Xbox controllers and uses native HID for PlayStation/Switch.
+            Native exposes advanced capabilities, but consuming games need access to the generated
+            hidraw device. Uinput restricts automatic selection to Xbox Series; manually selected
+            PlayStation/Switch profiles require auto or native. This option does not change other platforms.</td>
+    </tr>
+    <tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr>
+    <tr><td>Example</td><td colspan="2">@code{} linux_gamepad_backend = auto @endcode</td></tr>
+    <tr><td rowspan="3">Choices</td><td>auto</td><td>Input events for Xbox; native HID for PlayStation/Switch</td></tr>
+    <tr><td>native</td><td>Prefer native HID and advanced features</td></tr>
+    <tr><td>uinput</td><td>Input-event controllers only, without hidraw requirements</td></tr>
+</table>
+
 ### ds4_back_as_touchpad_click
 
 <table>

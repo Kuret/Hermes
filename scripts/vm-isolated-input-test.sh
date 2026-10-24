@@ -104,13 +104,14 @@ if [ "$#" -gt 0 ]; then
 	TEST_BINARY="$(realpath "$1")"
 	[ -x "$TEST_BINARY" ] || fail "Hermes test executable not found: $TEST_BINARY"
 	modprobe uhid
-	modprobe hid_playstation
-	modprobe hid_nintendo
+	for module in hid_playstation hid_nintendo hid_sony; do
+		modprobe "$module" || printf 'note: optional kernel driver %s is unavailable\n' "$module"
+	done
 	kill -TERM "$PROBE_PID"
 	wait "$PROBE_PID"
 	PROBE_PID=""
 	cd "$TEST_ROOT"
 	HERMES_TEST_KERNEL_INPUT=1 "$TEST_BINARY" \
 		--gtest_color=no \
-		--gtest_filter='VirtualHidInputTest.*:ControllerProfiles/VirtualHidKernelTest.*'
+		--gtest_filter='VirtualHidInputTest.*:ControllerProfiles/VirtualHidKernelTest.*:XboxEventProfiles/VirtualHidEventKernelTest.*'
 fi

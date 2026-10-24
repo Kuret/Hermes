@@ -60,6 +60,10 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   SDDM and Hermes-KMS only.
 
 ### Changed
+- Linux gamepad backend policy is now configurable. Auto keeps Xbox controllers
+  on uinput for ordinary rumble without hidraw access; native HID remains an
+  explicit option for trigger rumble and battery. PlayStation/Switch retain
+  native HID, and input-events-only Auto emulates Xbox Series.
 - Linux controller selection now offers all seven libvirtualhid profiles.
   Automatic Xbox/unknown-controller selection uses Xbox Series; explicit
   `xone` remains available. PlayStation MAC policy is now named
@@ -87,6 +91,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- The libvirtualhid integration workflow separates pure unit checks from a
+  kernel-device job, which also exercises an unprivileged SDL consumer with
+  per-device ACLs and rejects access to another seat's gamepad.
 - Linux pen/touch capability advertisement and native packet handling now
   respect input policy and backend availability. Stream cleanup releases
   remapped keys, the fifth mouse button, controller input and active pen/touch

@@ -51,6 +51,7 @@ endif()
 file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/tests/*.h
         ${CMAKE_SOURCE_DIR}/tests/*.cpp)
+list(REMOVE_ITEM TEST_SOURCES "${CMAKE_SOURCE_DIR}/tests/consumers/linux_hid_rumble.cpp")
 
 set(SUNSHINE_SOURCES
         ${SUNSHINE_TARGET_FILES})
@@ -107,6 +108,16 @@ target_link_libraries(${PROJECT_NAME}
         gtest
         ${PLATFORM_LIBRARIES})
 target_compile_definitions(${PROJECT_NAME} PUBLIC ${SUNSHINE_DEFINITIONS} ${TEST_DEFINITIONS})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    pkg_check_modules(HERMES_TEST_SDL2 QUIET IMPORTED_TARGET sdl2>=2.24)
+    if(TARGET PkgConfig::HERMES_TEST_SDL2)
+        add_executable(hermes-hid-consumer "${CMAKE_SOURCE_DIR}/tests/consumers/linux_hid_rumble.cpp")
+        set_target_properties(hermes-hid-consumer PROPERTIES CXX_STANDARD 23)
+        target_link_libraries(hermes-hid-consumer PRIVATE PkgConfig::HERMES_TEST_SDL2)
+        add_dependencies(${PROJECT_NAME} hermes-hid-consumer)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE HERMES_TEST_HID_CONSUMER="$<TARGET_FILE:hermes-hid-consumer>")
+    endif()
+endif()
 target_compile_options(${PROJECT_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${SUNSHINE_COMPILE_OPTIONS}>;$<$<COMPILE_LANGUAGE:CUDA>:${SUNSHINE_COMPILE_OPTIONS_CUDA};-std=c++17>)  # cmake-lint: disable=C0301
 target_link_options(${PROJECT_NAME} PRIVATE)
 
