@@ -287,7 +287,7 @@ namespace platf::gamepad {
       }
     }
 
-    std::optional<std::size_t> contact_slot(joypad_state &gamepad, std::uint32_t pointer_id, bool active) {
+    std::optional<std::size_t> contact_slot(const joypad_state &gamepad, std::uint32_t pointer_id, bool active) {
       for (std::size_t index = 0; index < gamepad.touch_pointer_ids.size(); ++index) {
         if (gamepad.touch_pointer_ids[index] == pointer_id) {
           return index;
@@ -298,7 +298,6 @@ namespace platf::gamepad {
       }
       for (std::size_t index = 0; index < gamepad.touch_pointer_ids.size(); ++index) {
         if (!gamepad.touch_pointer_ids[index].has_value()) {
-          gamepad.touch_pointer_ids[index] = pointer_id;
           return index;
         }
       }
@@ -427,12 +426,18 @@ namespace platf::gamepad {
       for (auto &contact : state.touchpad_contacts) {
         contact.active = false;
       }
-      gamepad->touch_pointer_ids.fill(std::nullopt);
-      virtualhid::log_failure("gamepad touch cancel all", gamepad->adapter->set_state(state));
+      const auto result = gamepad->adapter->set_state(state);
+      virtualhid::log_failure("gamepad touch cancel all", result);
+      if (result.ok()) {
+        gamepad->touch_pointer_ids.fill(std::nullopt);
+      }
       return;
     }
     const bool active = input.eventType == LI_TOUCH_EVENT_DOWN || input.eventType == LI_TOUCH_EVENT_MOVE;
     if (!active && input.eventType != LI_TOUCH_EVENT_UP && input.eventType != LI_TOUCH_EVENT_CANCEL && input.eventType != LI_TOUCH_EVENT_HOVER_LEAVE) {
+      return;
+    }
+    if (active && (!std::isfinite(input.x) || !std::isfinite(input.y))) {
       return;
     }
     const auto slot = contact_slot(*gamepad, input.pointerId, active);
@@ -447,17 +452,38 @@ namespace platf::gamepad {
     // The wire pointer id is 32 bits, while DualSense tracking ids are 7 bits.
     // Allocate an id on contact-down instead of truncating client ids, which
     // could otherwise make two simultaneous fingers appear identical.
-    const auto tracking_id = state.touchpad_contacts[*slot].active ? state.touchpad_contacts[*slot].id : static_cast<std::uint8_t>(gamepad->next_touch_id++ & 0x7F);
-    state.touchpad_contacts[*slot] = {
-      .id = tracking_id,
-      .active = active,
-      .x = std::clamp(input.x, 0.0F, 1.0F),
-      .y = std::clamp(input.y, 0.0F, 1.0F),
-    };
-    if (!active) {
-      gamepad->touch_pointer_ids[*slot].reset();
+    auto &contact = state.touchpad_contacts[*slot];
+    const bool new_contact = active && !contact.active;
+    auto tracking_id = static_cast<std::uint8_t>(gamepad->next_touch_id & 0x7F);
+    if (new_contact) {
+      // A finger can remain down while the other cycles through all 128 IDs.
+      // Never reuse the still-active finger's ID when the counter wraps.
+      for (const auto &other : state.touchpad_contacts) {
+        if (other.active && other.id == tracking_id) {
+          tracking_id = static_cast<std::uint8_t>((tracking_id + 1) & 0x7F);
+        }
+      }
     }
-    virtualhid::log_failure("gamepad touch", gamepad->adapter->set_state(state));
+    if (active) {
+      contact = {
+        .id = new_contact ? tracking_id : contact.id,
+        .active = true,
+        .x = std::clamp(input.x, 0.0F, 1.0F),
+        .y = std::clamp(input.y, 0.0F, 1.0F),
+      };
+    } else {
+      // Release packets need only an ID. Their unused coordinates may be
+      // absent or invalid; preserve the last position so cleanup still works.
+      contact.active = false;
+    }
+    const auto result = gamepad->adapter->set_state(state);
+    virtualhid::log_failure("gamepad touch", result);
+    if (result.ok()) {
+      gamepad->touch_pointer_ids[*slot] = active ? std::optional {input.pointerId} : std::nullopt;
+      if (new_contact) {
+        gamepad->next_touch_id = static_cast<std::uint8_t>((tracking_id + 1) & 0x7F);
+      }
+    }
   }
 
   void motion(input_raw_t *raw, const gamepad_motion_t &input) {

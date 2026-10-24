@@ -8,7 +8,7 @@ compiled or linked.
 
 The dependency is our fork,
 [MrOz59/libvirtualhid](https://github.com/MrOz59/libvirtualhid), pinned by CMake
-to commit `1831bc0d5b43b23ba694d397c8a9d4900186521c`. Updating the dependency
+to commit `faecdd942592e009abed38233e8208cad47e0651`. Updating the dependency
 requires reviewing and intentionally changing that SHA.
 
 The library uses C++23, Linux `uinput`/`uhid`, and libevdev. Hermes needs read

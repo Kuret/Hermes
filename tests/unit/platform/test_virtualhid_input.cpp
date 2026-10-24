@@ -446,6 +446,72 @@ namespace {
     EXPECT_FALSE(adapter->state().touchpad_contacts[1].active);
   }
 
+  TEST_F(VirtualHidInputTest, InvalidTouchpadCoordinatesDoNotConsumeSlotsOrPreventRelease) {
+    platf::input_raw_t raw {"hermes-kms-1", fake_runtime()};
+    const platf::gamepad_id_t id {0, 0};
+    ASSERT_EQ(platf::gamepad::alloc(&raw, id, {}, feedback), 0);
+    auto &gamepad = *raw.gamepads[0];
+    const auto nan = std::numeric_limits<float>::quiet_NaN();
+    const auto inf = std::numeric_limits<float>::infinity();
+    for (const float invalid : {nan, inf, -inf}) {
+      platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_DOWN, 100, invalid, 0.4F});
+      platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_MOVE, 200, 0.3F, invalid});
+    }
+    EXPECT_FALSE(gamepad.touch_pointer_ids[0]);
+    EXPECT_FALSE(gamepad.touch_pointer_ids[1]);
+    EXPECT_EQ(gamepad.next_touch_id, 0);
+
+    platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_DOWN, 1, 0.2F, 0.3F});
+    platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_DOWN, 2, 0.7F, 0.8F});
+    const auto previous = gamepad.adapter->state().touchpad_contacts[0];
+    platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_MOVE, 1, nan, 0.9F});
+    EXPECT_FLOAT_EQ(gamepad.adapter->state().touchpad_contacts[0].x, previous.x);
+    EXPECT_FLOAT_EQ(gamepad.adapter->state().touchpad_contacts[0].y, previous.y);
+
+    platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_UP, 1, nan, inf});
+    EXPECT_FALSE(gamepad.adapter->state().touchpad_contacts[0].active);
+    EXPECT_FALSE(gamepad.touch_pointer_ids[0]);
+    EXPECT_TRUE(gamepad.adapter->state().touchpad_contacts[1].active);
+    platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_DOWN, 3, -1.0F, 2.0F});
+    EXPECT_EQ(gamepad.touch_pointer_ids[0], 3U);
+    EXPECT_FLOAT_EQ(gamepad.adapter->state().touchpad_contacts[0].x, 0.0F);
+    EXPECT_FLOAT_EQ(gamepad.adapter->state().touchpad_contacts[0].y, 1.0F);
+    platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_CANCEL, 3, inf, nan});
+    EXPECT_FALSE(gamepad.touch_pointer_ids[0]);
+  }
+
+  TEST_F(VirtualHidInputTest, TouchpadTrackingIdWrapDoesNotAliasAnActiveFinger) {
+    platf::input_raw_t raw {"hermes-kms-1", fake_runtime()};
+    const platf::gamepad_id_t id {0, 0};
+    ASSERT_EQ(platf::gamepad::alloc(&raw, id, {}, feedback), 0);
+    platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_DOWN, 1, 0.2F, 0.3F});
+    for (int cycle = 0; cycle < 260; ++cycle) {
+      platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_DOWN, 2, 0.7F, 0.8F});
+      const auto state = raw.gamepads[0]->adapter->state();
+      ASSERT_TRUE(state.touchpad_contacts[0].active);
+      ASSERT_TRUE(state.touchpad_contacts[1].active);
+      EXPECT_NE(state.touchpad_contacts[0].id, state.touchpad_contacts[1].id) << cycle;
+      platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_UP, 2});
+    }
+  }
+
+  TEST_F(VirtualHidInputTest, FailedTouchpadSubmissionPreservesOwnershipUntilCleanupSucceeds) {
+    platf::input_raw_t raw {"hermes-kms-1", fake_runtime()};
+    const platf::gamepad_id_t id {0, 0};
+    ASSERT_EQ(platf::gamepad::alloc(&raw, id, {}, feedback), 0);
+    auto &gamepad = *raw.gamepads[0];
+    platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_DOWN, 1, 0.2F, 0.3F});
+    ASSERT_EQ(gamepad.touch_pointer_ids[0], 1U);
+    ASSERT_TRUE(gamepad.adapter->close().ok());
+    platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_DOWN, 2, 0.7F, 0.8F});
+    EXPECT_FALSE(gamepad.touch_pointer_ids[1]);
+    EXPECT_EQ(gamepad.next_touch_id, 1);
+    platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_UP, 1});
+    EXPECT_EQ(gamepad.touch_pointer_ids[0], 1U);
+    platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_CANCEL_ALL});
+    EXPECT_EQ(gamepad.touch_pointer_ids[0], 1U);
+  }
+
   TEST_F(VirtualHidInputTest, FeedbackUsesClientIndexDeduplicatesAndDoesNotOwnController) {
     platf::input_raw_t one {"hermes-kms-1", fake_runtime()};
     platf::input_raw_t two {"hermes-kms-12", fake_runtime()};

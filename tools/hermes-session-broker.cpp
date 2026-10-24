@@ -104,6 +104,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "session-broker-lock.h"
+
 namespace {
   namespace fs = std::filesystem;
 
@@ -870,7 +872,7 @@ namespace {
    * processes exist - and deleting the home out from under a running
    * compositor would corrupt whatever it is writing.
    */
-  std::optional<std::string> stop_session(const options_t &options, const std::string &account) {
+  std::optional<std::string> stop_session(const options_t & /*options*/, const std::string &account) {
     const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
     if (systemctl.empty()) {
       return "systemctl was not found";
@@ -1162,19 +1164,16 @@ namespace {
   }
 
   /**
-   * @brief Whether the request allocates or frees a session account slot.
+   * @brief Whether the request changes session accounts or their lifetime.
    *
-   * These are the requests the lock file exists for, and the only ones that
-   * serialize on it. Everything else - STATUS in particular, which callers
-   * poll every couple of seconds - is served without it, so a poll never has
-   * to wait behind another client's useradd, and a launch never waits behind
-   * a poll.
+   * ENSURE/PURGE and START/STOP must not race across broker instances. Read
+   * requests, including frequently polled STATUS, do not acquire this lock.
    */
   bool request_mutates(const std::vector<std::string> &request) {
     const auto &line = request.front();
     const auto split = line.find(' ');
     const auto verb = trim(split == std::string::npos ? line : line.substr(0, split));
-    return verb == "ENSURE" || verb == "PURGE";
+    return verb == "ENSURE" || verb == "PURGE" || verb == "START" || verb == "STOP";
   }
 
   void serve(const options_t &options, int connection) {
@@ -1200,17 +1199,16 @@ namespace {
     // arriving together could otherwise be given the same account. The lock
     // is cross-process (a socket-activated second instance is its own
     // process), which is why it is a file rather than a local variable.
-    int lock_fd = -1;
+    std::optional<hermes::session_broker::mutation_lock> lock;
     if (request_mutates(*request)) {
-      lock_fd = ::open(options.lock_file.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-      if (lock_fd >= 0) {
-        ::flock(lock_fd, LOCK_EX);
+      lock.emplace(options.lock_file.c_str());
+      if (!*lock) {
+        write_reply(connection, "ERR busy the broker mutation lock is unavailable or unsafe; no changes were made");
+        return;
       }
     }
     const auto reply = handle_request(options, *request);
-    if (lock_fd >= 0) {
-      ::close(lock_fd);  // Releases the lock.
-    }
+    lock.reset();
 
     write_reply(connection, reply);
   }

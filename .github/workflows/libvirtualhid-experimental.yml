@@ -55,11 +55,11 @@ jobs:
             -DBUILD_TESTS=ON
 
       - name: Compile Hermes and input tests
-        run: cmake --build build --target sunshine test_sunshine -j2
+        run: cmake --build build --target sunshine test_sunshine hermes-session-broker -j2
 
       - name: Test Hermes input translation and per-client feedback
         working-directory: build/tests
-        run: ./test_sunshine --gtest_color=yes --gtest_filter='VirtualHidInputTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*'
+        run: ./test_sunshine --gtest_color=yes --gtest_filter='VirtualHidInputTest.*:SessionBrokerLockTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*'
 
       - name: Configure pinned libvirtualhid tests
         run: |

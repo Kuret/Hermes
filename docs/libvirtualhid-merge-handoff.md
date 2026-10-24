@@ -4,6 +4,40 @@ Checkpoint de 25/10/2026, Australia/Sydney. Trabalho pausado a pedido do usuári
 para reiniciar o computador e continuar em outra máquina. **Não fazer merge na
 main do Hermes nem alterar Hermes-KMS nesta retomada sem nova autorização.**
 
+## Continuação de 25/10: descoberta e estado de input
+
+O Hermes agora fixa `faecdd942592e009abed38233e8208cad47e0651` da feature
+branch do nosso fork. As referências a `1831bc0` abaixo descrevem o checkpoint
+anterior e sua validação, preservados para contexto.
+
+- A biblioteca identifica uinput pelo sysfs do próprio handle. UHID exige o
+  phys e o unique ID do controle, inclusive no desktop compartilhado. Isso
+  evita misturar controles de mesmo nome/seat, aceitar metadados incompletos
+  ou devolver nós de um handle fechado.
+- O adapter não reserva slots de touchpad para NaN/inf, confirma alterações
+  de ownership somente após envio bem-sucedido, permite release/cancel sem
+  coordenadas válidas e evita colisões dos IDs de 7 bits após wrap.
+- ENSURE/PURGE/START/STOP agora recusam mutações se não obtiverem um lock
+  exclusivo e seguro. O broker rejeita symlink, hard link, FIFO e arquivo
+  gravável por outro usuário/grupo, sem bloquear indefinidamente.
+- A CI da biblioteca passa a executar nessa feature branch, com GCC/Clang e
+  compilação adicional sem XTest. A CI do Hermes compila o broker e inclui
+  seus testes de lock junto aos testes de input.
+
+Validação local deste lote: biblioteca e exemplos compilados com GCC 13,
+XTest desabilitado e warnings-as-errors; 133 testes da biblioteca aprovados,
+incluindo 62 do backend Linux; 5 testes do adapter usando os fontes reais e
+runtime fake; 5 testes de lock aprovados; broker compilado com warnings-as-errors.
+O arquivo completo de testes do adapter também passou na verificação de sintaxe.
+Não foram executados aqui os testes com `/dev/uinput`, `/dev/uhid`, systemd ou
+clientes reais. A compilação completa do Hermes e os testes de kernel ficam
+para a CI; os resultados anteriores de VM não comprovam este novo lote.
+
+**ACLs automáticas continuam pendentes.** Este lote corrige pré-requisitos de
+identidade/serialização; não concede acesso a nenhum dispositivo. A próxima
+tarefa autorizada continua sendo o broker registrar conta/UID/seat e conceder,
+revalidar e revogar ACLs por dispositivo, inclusive após hotplug/reinício.
+
 ## Repositórios e branches
 
 - Hermes: `https://github.com/MrOz59/Hermes.git`, branch
