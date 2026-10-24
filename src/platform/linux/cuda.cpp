@@ -15,6 +15,7 @@
 // lib includes
 #include <ffnvcodec/dynlink_loader.h>
 #include <NvFBC.h>
+#include <xf86drm.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -27,6 +28,7 @@ extern "C" {
 #include "cuda_upload_lifetime.h"
 #include "dmabuf_import_cache.h"
 #include "graphics.h"
+#include "src/config.h"
 #include "src/logging.h"
 #include "src/utility.h"
 #include "src/video.h"
@@ -479,6 +481,43 @@ namespace cuda {
   }
 
   /**
+   * The importer, FFmpeg's CUDA hwcontext and the page-locked frames all use
+   * CUDA device 0. When adapter_name names a different NVIDIA GPU, Hermes
+   * would capture for one GPU and encode on another; say so, and how to
+   * select the GPU consistently, instead of failing later or obscurely.
+   * CUDA_VISIBLE_DEVICES renumbers devices for every CUDA user in the
+   * process at once, which is what keeps all three on the same GPU.
+   */
+  void warn_if_adapter_is_another_nvidia_gpu(int importer_fd) {
+    const auto &adapter = config::video.adapter_name;
+    if (adapter.empty()) {
+      return;
+    }
+    const int adapter_fd = ::open(adapter.c_str(), O_RDONLY | O_CLOEXEC);
+    if (adapter_fd < 0) {
+      return;
+    }
+    drmDevicePtr configured = nullptr;
+    drmDevicePtr importer = nullptr;
+    constexpr int pci_vendor_nvidia = 0x10de;
+    if (!drmGetDevice2(adapter_fd, 0, &configured) && !drmGetDevice2(importer_fd, 0, &importer) &&
+        configured->bustype == DRM_BUS_PCI && importer->bustype == DRM_BUS_PCI &&
+        configured->deviceinfo.pci && configured->deviceinfo.pci->vendor_id == pci_vendor_nvidia &&
+        !drmDevicesEqual(configured, importer)) {
+      const auto *bus = configured->businfo.pci;
+      char address[32];
+      std::snprintf(address, sizeof(address), "%04x:%02x:%02x.%x", bus->domain, bus->bus, bus->dev, bus->func);
+      BOOST_LOG(warning) << "adapter_name "sv << adapter << " is the NVIDIA GPU at "sv << address
+                         << ", but CUDA device 0 (used for capture import and NVENC) is another GPU. "
+                            "Start Hermes with CUDA_VISIBLE_DEVICES set to that GPU's CUDA index "
+                            "(nvidia-smi -L) so capture and encoding use the same GPU."sv;
+    }
+    drmFreeDevice(&configured);
+    drmFreeDevice(&importer);
+    ::close(adapter_fd);
+  }
+
+  /**
    * HERMES_CUDA_EGL_IMPORT_CACHE: how many DMA-BUF imports the GL->CUDA
    * consumer keeps. Unset uses the default; 0 imports every frame as before.
    */
@@ -591,6 +630,7 @@ namespace cuda {
 
       ctx = std::move(*ctx_opt);
       release.disable();
+      warn_if_adapter_is_another_nvidia_gpu(file.el);
       return 0;
     }
 
