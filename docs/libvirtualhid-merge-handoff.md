@@ -6,7 +6,7 @@ main do Hermes nem alterar Hermes-KMS nesta retomada sem nova autorização.**
 
 ## Continuação de 25/10: descoberta e estado de input
 
-O Hermes agora fixa `faecdd942592e009abed38233e8208cad47e0651` da feature
+O Hermes agora fixa `923531ab41d440a2b564f596c191b476f226598e` da feature
 branch do nosso fork. As referências a `1831bc0` abaixo descrevem o checkpoint
 anterior e sua validação, preservados para contexto.
 
@@ -22,7 +22,11 @@ anterior e sua validação, preservados para contexto.
   gravável por outro usuário/grupo, sem bloquear indefinidamente.
 - A CI da biblioteca passa a executar nessa feature branch, com GCC/Clang e
   compilação adicional sem XTest. A CI do Hermes compila o broker e inclui
-  seus testes de lock junto aos testes de input.
+  seus testes de lock junto aos testes de input. O checkpoint anterior falhou
+  antes dos testes de kernel porque o runner Azure não tinha o módulo UHID;
+  o workflow agora instala os módulos extras do kernel e compartilha o /dev
+  do guest descartável para enxergar também os dispositivos criados após
+  iniciar o container. Confirmar essa preparação na próxima execução da CI.
 
 Validação local deste lote: biblioteca e exemplos compilados com GCC 13,
 XTest desabilitado e warnings-as-errors; 133 testes da biblioteca aprovados,

@@ -302,7 +302,7 @@ set(LIBVIRTUALHID_ENABLE_PACKAGING OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(hermes_libvirtualhid
         GIT_REPOSITORY https://github.com/MrOz59/libvirtualhid.git
-        GIT_TAG faecdd942592e009abed38233e8208cad47e0651
+        GIT_TAG 923531ab41d440a2b564f596c191b476f226598e
         GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(hermes_libvirtualhid)
 set(BUILD_TESTS "${_hermes_saved_build_tests}")

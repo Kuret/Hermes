@@ -107,14 +107,28 @@ jobs:
           name: libvirtualhid-linux-input-tests
       - name: Load the disposable runner's virtual input modules
         run: |
-          sudo modprobe uinput
-          sudo modprobe uhid
+          sudo apt-get update
+          extra_modules="linux-modules-extra-$(uname -r)"
+          if apt-cache show "$extra_modules" >/dev/null 2>&1; then
+            sudo apt-get install -y --no-install-recommends "$extra_modules"
+          fi
+          for module in uinput uhid; do
+            sudo modprobe "$module" || {
+              echo "::error::Required virtual input module $module is unavailable on $(uname -r)"
+              exit 1
+            }
+            test -c "/dev/$module" || {
+              echo "::error::Required character device /dev/$module was not created"
+              exit 1
+            }
+          done
           for module in hid_playstation hid_nintendo hid_sony; do
             sudo modprobe "$module" || echo "::notice::Optional HID driver $module is unavailable"
           done
       - name: Test real kernel devices, per-seat routing and non-root rumble
         run: |
           docker run --rm --privileged \
+            -v /dev:/dev \
             -v "$GITHUB_WORKSPACE:/__w/Hermes/Hermes" \
             -v /lib/modules:/lib/modules:ro \
             -w /__w/Hermes/Hermes \
