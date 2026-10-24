@@ -8,7 +8,7 @@ compiled or linked.
 
 The dependency is our fork,
 [MrOz59/libvirtualhid](https://github.com/MrOz59/libvirtualhid), pinned by CMake
-to commit `1ec0d33c51f61cea6f5d645b895a24ce0cd548d1`. Updating the dependency
+to commit `38904f3f251c6387b4c77de54eb9ce2fc1e67bdf`. Updating the dependency
 requires reviewing and intentionally changing that SHA.
 
 The library uses C++23, Linux `uinput`/`uhid`, and libevdev. Hermes needs read
@@ -76,6 +76,13 @@ The branch workflow compiles Hermes and runs the library's identity/discovery,
 UHID round-trip and fail-closed isolation tests. On a host with uinput/uhid,
 the library consumer suite also verifies evdev, libinput, SDL, touchscreen,
 trackpad and tablet behavior.
+
+SDL versions can expose Xbox directional inputs as raw buttons or a hat; the
+tests verify canonical button transitions independently of that layout. The
+DualSense kernel-child discovery test requires the HID device to be bound to
+`hid-playstation`. It explicitly reports a skip when a runner binds another
+driver instead; that skip does not validate motion/touchpad child discovery.
+The local VM validation below used `hid-playstation` and ran that test.
 
 The repository's `scripts/vm-isolated-input-test.sh` validates the packaged
 udev rules inside a disposable VM. Pass `build/tests/test_sunshine` to also
