@@ -26,6 +26,16 @@ jobs:
             -fsanitize=address,undefined -fno-omit-frame-pointer \
             tests/standalone/cuda-upload-lifetime.cc -o /tmp/upload-lifetime
           /tmp/upload-lifetime
+      - name: Exercise the EGL import cache and NVENC routing (C++17 and C++23)
+        run: |
+          for std in c++17 c++23; do
+            for test in dmabuf-import-cache hermes-nvenc-route; do
+              c++ -std=$std -Wall -Wextra -Werror -pedantic -I. \
+                -fsanitize=address,undefined -fno-omit-frame-pointer \
+                tests/standalone/$test.cc -o /tmp/$test-$std
+              /tmp/$test-$std
+            done
+          done
 
   cuda-build:
     runs-on: ubuntu-24.04
