@@ -1,41 +1,61 @@
-# Experimental Linux input backend: MrOz59/libvirtualhid
+# Linux input backend: MrOz59/libvirtualhid
 
-**Status: experimental branch only.** This document describes
-`experimental/libvirtualhid-input`. There is no PR to `main`, release date,
-or promise of production compatibility.
+**Status: integration branch.** `experimental/libvirtualhid-input` uses
+libvirtualhid for the complete Linux virtual-input stack. Inputtino is not
+compiled or linked.
 
 ## Dependency provenance
 
-The dependency is **our fork**, [MrOz59/libvirtualhid](https://github.com/MrOz59/libvirtualhid),
-NOT the upstream LizardByte repository. CMake fetches exactly commit
-`439579c38180f9dad7c5324da195374cdbd325b4` from that fork. Updating
-the dependency requires reviewing and intentionally changing this commit SHA.
+The dependency is our fork,
+[MrOz59/libvirtualhid](https://github.com/MrOz59/libvirtualhid), pinned by CMake
+to commit `1ec0d33c51f61cea6f5d645b895a24ce0cd548d1`. Updating the dependency
+requires reviewing and intentionally changing that SHA.
 
-The library uses C++23, standard Linux `uinput`/`uhid` interfaces, and
-`libevdev`. Existing Hermes needs for libevdev and GPU/capture dependencies
-remain unchanged. The `/dev/uinput` device must be accessible to Hermes.
-Do not use `lvh::BackendKind::fake` in production: it accepts events but
-creates no Linux virtual devices.
+The library uses C++23, Linux `uinput`/`uhid`, and libevdev. Hermes needs read
+and write access to `/dev/uinput` and `/dev/uhid`; applications consuming
+controller output reports also need the generated `hidraw` node. The packaged
+`60-hermes.rules` grants those permissions. Never use
+`lvh::BackendKind::fake` in production: it accepts events without creating
+kernel devices.
 
-## First integration milestone
+## Integrated paths
 
-| Path | Active implementation with `HERMES_LVH_PEN_TOUCH=ON` | Status |
-| --- | --- | --- |
-| S Pen / digitizer | `lvh::PenTablet` | Integrated, no physical validation |
-| Multitouch / finger hover | `lvh::Touchscreen` | Integrated, no physical validation |
-| Mouse, absolute mouse, scroll | `inputtino` | Not migrated |
-| Keyboard / text / shortcuts | `inputtino` | Not migrated |
-| Gamepads (Xbox One, Switch, DualSense) | `inputtino` | Not migrated |
-| Gamepad motion / touchpad / battery | `inputtino` | Not migrated |
-| Rumble / LEDs / adaptive triggers | `inputtino` | Not migrated |
+| Path | libvirtualhid implementation |
+| --- | --- |
+| Relative and absolute mouse, five buttons, horizontal and vertical high-resolution scroll | `lvh::Mouse` |
+| Keyboard and UTF-8 text | `lvh::Keyboard` |
+| Xbox One, DualSense and Switch Pro controllers | `lvh::GamepadStateAdapter` |
+| Controller touchpad, motion and battery | cached `lvh::GamepadState` |
+| Rumble, trigger rumble, RGB LED and adaptive triggers | `lvh::GamepadOutput` callback |
+| Multitouch, hover and cancel-all | `lvh::Touchscreen` |
+| Pen, eraser, pressure, distance, tilt and three barrel buttons | `lvh::PenTablet` |
 
-Hermes' existing input packets and client-permission checks remain
-unchanged. Pen and touch are initialized per client, and the previous
-`0xBEEF:0xDEAD` virtual-input vendor/product identifiers and device
-names are retained for desktop display binding. Touch contact IDs,
-`CANCEL_ALL`, stylus pressure, hover distance, tilt, eraser, and stylus
-side buttons are translated into the new API. Button-only pen events
-do not interrupt contact.
+Hermes still owns GameStream packet parsing, client permissions, keyboard
+repeat and feedback messages. The adapter translates those contracts into
+libvirtualhid state and reports.
+
+## Isolated sessions
+
+Every isolated stream receives its own `platf::input_t`, libvirtualhid runtime,
+mouse, keyboard and controller collection. Pen and touchscreen state remains
+per client. All devices carry the matching `hermes-kms-N` physical identity:
+
+- uinput devices expose it through `UI_SET_PHYS`;
+- UHID controllers expose it through `HID_PHYS`;
+- node discovery requires an exact physical-identity match; and
+- an isolated keyboard or mouse never falls back to process-global XTest.
+
+The packaged udev rule maps that identity to the private `ID_SEAT`. UHID
+controller drivers create their input children two levels below the HID device
+and may clear `input/phys`, so the rule propagates the seat from the HID parent
+to every `input`, `event`, `js` and `hidraw` child. Device names are not used as
+the isolation boundary. DualSense MACs are randomized by default; deterministic
+mode includes the private session identity so two seats cannot alias each
+other. Switch Pro initialization also advertises a distinct, session-scoped
+MAC rather than the formerly fixed protocol MAC.
+
+Session teardown destroys only that session's runtime and kernel handles. The
+shared desktop continues to use an input object with an empty session tag.
 
 ## Building
 
@@ -43,54 +63,53 @@ do not interrupt contact.
 git clone --recursive https://github.com/MrOz59/Hermes.git
 cd Hermes
 git switch experimental/libvirtualhid-input
-git submodule update --init --recursive
-cmake -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DHERMES_LVH_PEN_TOUCH=ON
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target sunshine -j2
 ```
 
-The first configure fetches the pinned `MrOz59/libvirtualhid` revision.
-A fresh checkout and network access are needed for FetchContent.
-The `experimental/libvirtualhid-input` branch has its own Actions
-workflow which compiles **both** configurations:
-
-```bash
-# A/B baseline: pen and touch continue using inputtino
-cmake -B build-inputtino -G Ninja -DHERMES_LVH_PEN_TOUCH=OFF
-cmake --build build-inputtino --target sunshine -j2
-```
-
-**Do not launch both builds simultaneously on one seat**: two processes can
-compete for virtual-display devices and input. A build can compile without
-`/dev/uinput` access but cannot create the real input devices without it.
-
-## Known gaps before retiring inputtino
-
-1. Migrate mouse and keyboard while preserving relative/absolute pointer
-   placement, high-resolution scroll, Linux layout/scancode semantics,
-   Unicode text, and X11 fallback.
-2. Reproduce gamepad selection and capability signaling, per-client
-   indices, stable controller identity, rumble, LED, adaptive triggers,
-   motion sensors, battery and controller touchpad.
-3. Replace temporary dual-library build wiring and inputtino-specific
-   settings with an adapter owning all `lvh::Runtime` devices.
-4. Test Wayland and X11 pen/touch with physical hardware (especially S Pen,
-   eraser and barrel button), multi-monitor offsets, GNOME/KDE display
-   binding and per-client isolation. Verify no duplicate or stuck devices
-   after disconnect.
-5. Add reproducible fake-runtime behavioral tests and a long-running
-   input replay test for contact/hover/pressure ordering.
-6. Check sandbox/container `uinput` permissions and image-based Linux
-   distro packaging (including Bazzite) before experimental binaries
-   are shared more broadly.
-
-Until these are complete, removing `inputtino` entirely would regress
-keyboard, mouse or gamepad functionality.
+The first configure fetches the pinned fork revision. There is no backend
+selection option: Linux builds use libvirtualhid exclusively.
 
 ## Validation
 
-The GitHub workflow compiles Hermes with the new path ON and the legacy
-path OFF. This catches compile/link failures, not real digitizer
-semantics. Physical S Pen, Krita and Linux desktop behavior remain to
-be tested after the code builds.
+The branch workflow compiles Hermes and runs the library's identity/discovery,
+UHID round-trip and fail-closed isolation tests. On a host with uinput/uhid,
+the library consumer suite also verifies evdev, libinput, SDL, touchscreen,
+trackpad and tablet behavior.
+
+The repository's `scripts/vm-isolated-input-test.sh` validates the packaged
+udev rules inside a disposable VM. Pass `build/tests/test_sunshine` to also
+exercise the actual Hermes adapter with two concurrent private seats, including
+seat 12 to cover dynamically allocated indices beyond the old eight-seat pool:
+
+```bash
+cmake -B build -G Ninja -DBUILD_TESTS=ON
+cmake --build build --target sunshine test_sunshine -j2
+# Inside a disposable guest, as root with udev running:
+scripts/vm-isolated-input-test.sh /absolute/path/to/build/tests/test_sunshine
+```
+
+Validation on 2026-10-24 passed 193 library tests (one xpadneo-specific test
+skipped), 16 Hermes adapter/configuration tests, and all 14 tests in the VM
+adapter run. The VM run exercised Xbox One, DualSense and Switch Pro with
+independent keyboard, relative/absolute mouse, touch and pen devices on
+`hermes-kms-1` and `hermes-kms-12`. For each controller profile it replayed
+1000 batches at a target rate of 1000 Hz; each batch contained keyboard, mouse,
+touchscreen, pen and controller input. There were no evdev `SYN_DROPPED`
+events, all 1000 keyboard transitions and relative moves arrived, and the
+checked input events did not appear on the other session. Teardown removed
+only the first session's devices; the surviving session still accepted input.
+
+These tests verify kernel input routing and lifetime, not an entire streamed
+desktop or applications running under broker-created Unix accounts. Such
+applications still require device access appropriate to their account; seatd
+access for a compositor does not itself grant hidraw access to a game. The
+container profile deliberately excludes hidraw, so native HID controller
+feedback and advanced features need separate container validation before this
+branch is promoted to a release.
+
+Physical pen hardware is not required for the synthetic pen/tablet tests. It
+is still useful before a release for validating device-specific Android stylus
+quirks, desktop applications such as Krita, and end-to-end feel. Likewise,
+real concurrent clients remain the final integration test for compositor,
+audio and lifecycle behavior outside the input library itself.

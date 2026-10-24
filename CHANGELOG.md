@@ -60,6 +60,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   SDDM and Hermes-KMS only.
 
 ### Changed
+- Linux virtual input now uses the pinned MrOz59/libvirtualhid fork for the
+  complete stack: keyboard, relative and absolute mouse, high-resolution
+  scrolling, Xbox One/Switch Pro/DualSense controllers and their feedback,
+  multitouch, and pen/tablet input. The Inputtino submodule and adapter were
+  removed. Private Hermes-KMS sessions keep independent runtimes and physical
+  identities; udev now propagates a UHID controller's `hermes-kms-N` identity
+  to its event, joystick and hidraw children so controllers remain on the same
+  isolated seat as that session's keyboard, mouse, touch and pen devices.
 - A session that asks for a virtual display now fails to start when that
   display cannot be set up, instead of streaming a physical monitor ([#58]).
   This holds for every way of asking for one (the application's

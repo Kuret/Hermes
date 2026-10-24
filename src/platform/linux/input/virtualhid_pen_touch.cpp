@@ -4,22 +4,21 @@
  */
 #include "virtualhid_pen_touch.h"
 
+#include "src/logging.h"
+#include "src/platform/linux/virtual_display.h"
+#include "virtualhid_common.h"
+
 #include <algorithm>
 #include <cmath>
 #include <numbers>
-#include <utility>
 #include <string>
-
-#include "src/logging.h"
-#include "src/platform/linux/virtual_display.h"
+#include <utility>
 
 namespace platf::virtualhid {
   namespace {
-    constexpr std::uint16_t hermes_vendor = 0xBEEF;
-    constexpr std::uint16_t hermes_product = 0xDEAD;
-
-    // Until the full-desktop mapping is migrated, preserve the exact normalized
-    // coordinate convention used by Hermes' existing inputtino backend.
+    // Preserve the coordinate convention used by Hermes' desktop binding:
+    // offsets are zero for a private output and locate the output within the
+    // host desktop for a shared session.
     float position(float normalized, int offset, int span) {
       if (!std::isfinite(normalized)) {
         return 0.0f;
@@ -32,58 +31,42 @@ namespace platf::virtualhid {
       return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
     }
 
+    float contact_size(float value) {
+      return std::isfinite(value) && value > 0.0F ? value : 0.0F;
+    }
+
     int orientation(std::uint16_t rotation) {
       if (rotation == LI_ROT_UNKNOWN) {
         return 0;
       }
       int degrees = static_cast<int>(rotation) % 360;
-      if (degrees < 0) degrees += 360;
-      if (degrees > 90 && degrees < 270) degrees = 180 - degrees;
-      if (degrees > 90) degrees -= 360;
+      if (degrees < 0) {
+        degrees += 360;
+      }
+      if (degrees > 90 && degrees < 270) {
+        degrees = 180 - degrees;
+      }
+      if (degrees > 90) {
+        degrees -= 360;
+      }
       return std::clamp(degrees, -90, 90);
     }
 
-    void log_failure(const char *operation, const lvh::OperationStatus &result) {
-      if (!result.ok()) {
-        BOOST_LOG(warning) << "[libvirtualhid] " << operation << ": " << result.message();
-      }
-    }
+  }  // namespace
 
-    lvh::DeviceProfile with_hermes_identity(lvh::DeviceProfile profile,
-                                            const std::string &session_tag,
-                                            const char *display_name) {
-      profile.vendor_id = hermes_vendor;
-      profile.product_id = hermes_product;
-      profile.version = 0x111;
-      profile.name = display_name;
-      profile.linux_phys = session_tag;
-      return profile;
-    }
-  }
-
-  client_devices_t::client_devices_t(const std::string &session_tag) {
-    lvh::RuntimeOptions options;
-    // The libvirtualhid default is the *fake* backend. Never use that for a
-    // stream: it appears to accept events without creating Linux devices.
-    options.backend = lvh::BackendKind::platform_default;
-    options.log_callback = [](lvh::LogLevel level, const std::string &message) {
-      if (level == lvh::LogLevel::error || level == lvh::LogLevel::warning) {
-        BOOST_LOG(warning) << "[libvirtualhid] " << message;
-      } else {
-        BOOST_LOG(debug) << "[libvirtualhid] " << message;
-      }
-    };
-    runtime = lvh::Runtime::create(std::move(options));
+  client_devices_t::client_devices_t(const std::string &session_tag, std::unique_ptr<lvh::Runtime> input_runtime) {
+    runtime = input_runtime ? std::move(input_runtime) : create_runtime();
     if (!runtime) {
       BOOST_LOG(error) << "[libvirtualhid] Failed to create Linux HID runtime";
       return;
     }
 
     lvh::CreateTouchscreenOptions touch_options;
-    touch_options.profile = with_hermes_identity(lvh::profiles::touchscreen(),
-                                                 session_tag,
-                                                 session_tag.empty() ? VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME
-                                                                     : "Hermes Session Touch");
+    touch_options.profile = with_hermes_identity(
+      lvh::profiles::touchscreen(),
+      session_tag,
+      session_tag.empty() ? VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME : "Hermes Session Touch"
+    );
     touch_options.stable_id = session_tag + "-touch";
     auto created_touch = runtime->create_touchscreen(touch_options);
     if (created_touch) {
@@ -94,10 +77,11 @@ namespace platf::virtualhid {
     }
 
     lvh::CreatePenTabletOptions pen_options;
-    pen_options.profile = with_hermes_identity(lvh::profiles::pen_tablet(),
-                                               session_tag,
-                                               session_tag.empty() ? VDISPLAY::VIRTUAL_PEN_DEVICE_NAME
-                                                                   : "Hermes Session Pen");
+    pen_options.profile = with_hermes_identity(
+      lvh::profiles::pen_tablet(),
+      session_tag,
+      session_tag.empty() ? VDISPLAY::VIRTUAL_PEN_DEVICE_NAME : "Hermes Session Pen"
+    );
     pen_options.stable_id = session_tag + "-pen";
     auto created_pen = runtime->create_pen_tablet(pen_options);
     if (created_pen) {
@@ -116,38 +100,48 @@ namespace platf::virtualhid {
     switch (event.eventType) {
       case LI_TOUCH_EVENT_HOVER:
       case LI_TOUCH_EVENT_DOWN:
-      case LI_TOUCH_EVENT_MOVE: {
-        lvh::TouchContact contact;
-        contact.id = id;
-        contact.x = position(event.x, port.offset_x, port.width);
-        contact.y = position(event.y, port.offset_y, port.height);
-        contact.pressure = analog(event.pressureOrDistance);
-        contact.orientation = orientation(event.rotation);
-        contact.touching = event.eventType != LI_TOUCH_EVENT_HOVER;
-        log_failure("touch update", devices.touch->place_contact(contact));
-        devices.active_contacts.insert(id);
-        return;
-      }
+      case LI_TOUCH_EVENT_MOVE:
+        {
+          lvh::TouchContact contact;
+          contact.id = id;
+          contact.x = position(event.x, port.offset_x, port.width);
+          contact.y = position(event.y, port.offset_y, port.height);
+          contact.pressure = analog(event.pressureOrDistance);
+          contact.orientation = orientation(event.rotation);
+          contact.touching = event.eventType != LI_TOUCH_EVENT_HOVER;
+          contact.viewport = {
+            .offset_x = port.offset_x,
+            .offset_y = port.offset_y,
+            .width = port.width,
+            .height = port.height,
+          };
+          contact.contact_major_axis = contact_size(event.contactAreaMajor);
+          contact.contact_minor_axis = contact_size(event.contactAreaMinor);
+          virtualhid::log_failure("touch update", devices.touch->place_contact(contact));
+          devices.active_contacts.insert(id);
+          return;
+        }
       case LI_TOUCH_EVENT_UP:
-        log_failure("touch release", devices.touch->release_contact(id));
+        virtualhid::log_failure("touch release", devices.touch->release_contact(id));
         devices.active_contacts.erase(id);
         return;
       case LI_TOUCH_EVENT_CANCEL:
-        log_failure("touch cancel", devices.touch->cancel_contact(id));
+        virtualhid::log_failure("touch cancel", devices.touch->cancel_contact(id));
         devices.active_contacts.erase(id);
         return;
       case LI_TOUCH_EVENT_HOVER_LEAVE:
-        log_failure("touch leave", devices.touch->leave_contact(id));
+        virtualhid::log_failure("touch leave", devices.touch->leave_contact(id));
         devices.active_contacts.erase(id);
         return;
-      case LI_TOUCH_EVENT_CANCEL_ALL: {
-        // Inputtino previously had no implementation for CANCEL_ALL.
-        for (const auto active : devices.active_contacts) {
-          log_failure("touch cancel all", devices.touch->cancel_contact(active));
+      case LI_TOUCH_EVENT_CANCEL_ALL:
+        {
+          // Release every contact tracked for this client in one operation.
+          for (const auto active : devices.active_contacts) {
+            virtualhid::log_failure("touch cancel all", devices.touch->cancel_contact(active));
+          }
+          devices.active_contacts.clear();
+          return;
         }
-        devices.active_contacts.clear();
-        return;
-      }
       default:
         return;
     }
@@ -168,7 +162,7 @@ namespace platf::virtualhid {
       }
       const bool pressed = (current_buttons & bit) != 0;
       const auto result = devices.pen->button(button, pressed);
-      log_failure("pen button", result);
+      virtualhid::log_failure("pen button", result);
       if (result.ok()) {
         if (pressed) {
           devices.pen_buttons |= bit;
@@ -187,9 +181,15 @@ namespace platf::virtualhid {
 
     lvh::PenToolState tool;
     switch (event.toolType) {
-      case LI_TOOL_TYPE_PEN: tool.tool = lvh::PenToolType::pen; break;
-      case LI_TOOL_TYPE_ERASER: tool.tool = lvh::PenToolType::eraser; break;
-      default: tool.tool = lvh::PenToolType::unchanged; break;
+      case LI_TOOL_TYPE_PEN:
+        tool.tool = lvh::PenToolType::pen;
+        break;
+      case LI_TOOL_TYPE_ERASER:
+        tool.tool = lvh::PenToolType::eraser;
+        break;
+      default:
+        tool.tool = lvh::PenToolType::unchanged;
+        break;
     }
     tool.x = position(event.x, port.offset_x, port.width);
     tool.y = position(event.y, port.offset_y, port.height);
@@ -199,25 +199,20 @@ namespace platf::virtualhid {
       case LI_TOUCH_EVENT_MOVE:
         tool.transition = lvh::PointerTransition::update;
         tool.pressure = analog(event.pressureOrDistance);
-        devices.pen_touching = true;
         break;
       case LI_TOUCH_EVENT_HOVER:
         tool.transition = lvh::PointerTransition::update;
         tool.distance = analog(event.pressureOrDistance);
-        devices.pen_touching = false;
         break;
       case LI_TOUCH_EVENT_UP:
         tool.transition = lvh::PointerTransition::release;
-        devices.pen_touching = false;
         break;
       case LI_TOUCH_EVENT_CANCEL:
       case LI_TOUCH_EVENT_CANCEL_ALL:
         tool.transition = lvh::PointerTransition::cancel;
-        devices.pen_touching = false;
         break;
       case LI_TOUCH_EVENT_HOVER_LEAVE:
         tool.transition = lvh::PointerTransition::leave;
-        devices.pen_touching = false;
         break;
       default:
         return;
@@ -232,6 +227,6 @@ namespace platf::virtualhid {
       tool.tilt_y = std::atan2(std::cos(rotation_rad) * r, z) * 180.0f / std::numbers::pi_v<float>;
     }
 
-    log_failure("pen tool update", devices.pen->place_tool(tool));
+    virtualhid::log_failure("pen tool update", devices.pen->place_tool(tool));
   }
-}
+}  // namespace platf::virtualhid

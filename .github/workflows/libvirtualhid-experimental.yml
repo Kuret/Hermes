@@ -1,4 +1,4 @@
-name: Experimental libvirtualhid Linux input
+name: libvirtualhid Linux input
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 
-# Only the newest experimental commit needs a full compiler matrix.
+# Only the newest integration commit needs a full compiler and adapter run.
 concurrency:
   group: hermes-libvirtualhid-${{ github.ref }}
   cancel-in-progress: true
@@ -19,11 +19,7 @@ jobs:
     container:
       image: archlinux:latest
     timeout-minutes: 55
-    strategy:
-      fail-fast: false
-      matrix:
-        lvh_pen_touch: [ON, OFF]
-    name: Linux input (libvirtualhid ${{ matrix.lvh_pen_touch }})
+    name: Linux input (libvirtualhid)
     steps:
       - name: Install Linux build dependencies
         run: |
@@ -31,7 +27,7 @@ jobs:
           pacman -S --noconfirm --needed \
             base-devel git cmake ninja boost openssl opus ffmpeg \
             libdrm wayland libx11 libxrandr libxfixes libxcb \
-            libva libvdpau libcap curl libevdev systemd \
+            libva libvdpau libcap curl libevdev libinput sdl2 systemd \
             miniupnpc libpulse qt6-base qt6-svg npm nodejs \
             icu numactl
 
@@ -43,7 +39,7 @@ jobs:
       - name: Allow checkout path
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Configure with requested input backend
+      - name: Configure Hermes
         run: |
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -51,8 +47,32 @@ jobs:
             -DSUNSHINE_ENABLE_X11=ON \
             -DSUNSHINE_ENABLE_DRM=ON \
             -DSUNSHINE_ENABLE_CUDA=OFF \
-            -DBUILD_TESTS=OFF \
-            -DHERMES_LVH_PEN_TOUCH=${{ matrix.lvh_pen_touch }}
+            -DBUILD_TESTS=ON
 
-      - name: Compile Hermes
-        run: cmake --build build --target sunshine -j2
+      - name: Compile Hermes and input tests
+        run: cmake --build build --target sunshine test_sunshine -j2
+
+      - name: Test Hermes input translation and per-client feedback
+        working-directory: build/tests
+        run: ./test_sunshine --gtest_color=yes --gtest_filter='VirtualHidInputTest.*'
+
+      - name: Configure pinned libvirtualhid tests
+        run: |
+          cmake -S build/_deps/hermes_libvirtualhid-src \
+            -B cmake-build-libvirtualhid-tests -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=ON \
+            -DBUILD_DOCS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DLIBVIRTUALHID_BUILD_TOOLS=OFF \
+            -DLIBVIRTUALHID_INSTALL=OFF \
+            -DLIBVIRTUALHID_ENABLE_PACKAGING=OFF
+
+      - name: Compile libvirtualhid tests
+        run: cmake --build cmake-build-libvirtualhid-tests --target test_libvirtualhid -j2
+
+      - name: Test state adapters and isolated-session identity
+        run: |
+          cmake-build-libvirtualhid-tests/tests/test_libvirtualhid \
+            --gtest_color=yes \
+            --gtest_filter='-LinuxConsumerTest.*'

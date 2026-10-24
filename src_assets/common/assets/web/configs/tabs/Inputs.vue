@@ -86,9 +86,9 @@ const config = ref(props.config)
                 <!-- DS5 Option: Controller MAC randomization (on Automatic: Linux only) -->
                 <template v-if="config.gamepad === 'ds5' || (config.gamepad === 'auto' && platform === 'linux')">
                   <Checkbox class="mb-3"
-                            id="ds5_inputtino_randomize_mac"
+                            id="ds5_virtualhid_randomize_mac"
                             locale-prefix="config"
-                            v-model="config.ds5_inputtino_randomize_mac"
+                            v-model="config.ds5_virtualhid_randomize_mac"
                             default="true"
                   ></Checkbox>
                 </template>

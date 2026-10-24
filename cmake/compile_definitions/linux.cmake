@@ -284,64 +284,42 @@ else()
     message(STATUS "Tray icon disabled")
 endif()
 
-# These need to be set before adding the inputtino subdirectory in order for them to be picked up
+# These need to be set before adding libvirtualhid so its Linux backend can
+# reuse Hermes' system or externally-built libevdev.
 set(LIBEVDEV_CUSTOM_INCLUDE_DIR "${EVDEV_INCLUDE_DIR}")
 set(LIBEVDEV_CUSTOM_LIBRARY "${EVDEV_LIBRARY}")
 
-# Experimental migration to our own libvirtualhid fork. This first
-# milestone migrates pen and touchscreen, while inputtino still handles
-# mouse, keyboard and gamepads. Keep this switch for A/B testing.
-option(HERMES_LVH_PEN_TOUCH
-        "Use MrOz59/libvirtualhid instead of inputtino for Linux pen and touch" ON)
+# Hermes' Linux input stack is backed exclusively by our libvirtualhid fork.
+include(FetchContent)
+set(_hermes_saved_build_tests "${BUILD_TESTS}")
+set(_hermes_saved_build_docs "${BUILD_DOCS}")
+set(BUILD_TESTS OFF)
+set(BUILD_DOCS OFF)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LIBVIRTUALHID_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(LIBVIRTUALHID_INSTALL OFF CACHE BOOL "" FORCE)
+set(LIBVIRTUALHID_ENABLE_PACKAGING OFF CACHE BOOL "" FORCE)
 
-add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/inputtino")
-list(APPEND SUNSHINE_EXTERNAL_LIBRARIES inputtino::libinputtino)
-file(GLOB_RECURSE INPUTTINO_SOURCES
-        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/inputtino*.h
-        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/inputtino*.cpp)
+FetchContent_Declare(hermes_libvirtualhid
+        GIT_REPOSITORY https://github.com/MrOz59/libvirtualhid.git
+        GIT_TAG 1ec0d33c51f61cea6f5d645b895a24ce0cd548d1
+        GIT_SHALLOW FALSE)
+FetchContent_MakeAvailable(hermes_libvirtualhid)
+set(BUILD_TESTS "${_hermes_saved_build_tests}")
+set(BUILD_DOCS "${_hermes_saved_build_docs}")
+unset(_hermes_saved_build_tests)
+unset(_hermes_saved_build_docs)
 
-if(HERMES_LVH_PEN_TOUCH)
-    include(FetchContent)
+list(APPEND SUNSHINE_EXTERNAL_LIBRARIES libvirtualhid::libvirtualhid)
+file(GLOB_RECURSE LIBVIRTUALHID_INPUT_SOURCES
+        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/virtualhid*.h
+        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/virtualhid*.cpp)
+list(APPEND PLATFORM_TARGET_FILES ${LIBVIRTUALHID_INPUT_SOURCES})
+message(STATUS "Hermes Linux input backend: MrOz59/libvirtualhid")
 
-    # Never use the upstream LizardByte repository here. This commit is from
-    # MrOz59/libvirtualhid (master), with Linux pen/touch support.
-    # libvirtualhid uses generic BUILD_TESTS/BUILD_DOCS options too. Limit
-    # these overrides to its subproject: Hermes' own test suite must not be
-    # silently disabled as a side effect of enabling the HID backend.
-    set(_hermes_saved_build_tests "${BUILD_TESTS}")
-    set(_hermes_saved_build_docs "${BUILD_DOCS}")
-    set(BUILD_TESTS OFF)
-    set(BUILD_DOCS OFF)
-    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(LIBVIRTUALHID_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-    set(LIBVIRTUALHID_INSTALL OFF CACHE BOOL "" FORCE)
-    set(LIBVIRTUALHID_ENABLE_PACKAGING OFF CACHE BOOL "" FORCE)
-
-    FetchContent_Declare(hermes_libvirtualhid
-            GIT_REPOSITORY https://github.com/MrOz59/libvirtualhid.git
-            GIT_TAG 439579c38180f9dad7c5324da195374cdbd325b4
-            GIT_SHALLOW FALSE)
-    FetchContent_MakeAvailable(hermes_libvirtualhid)
-    set(BUILD_TESTS "${_hermes_saved_build_tests}")
-    set(BUILD_DOCS "${_hermes_saved_build_docs}")
-    unset(_hermes_saved_build_tests)
-    unset(_hermes_saved_build_docs)
-    list(APPEND SUNSHINE_EXTERNAL_LIBRARIES libvirtualhid::libvirtualhid)
-    add_compile_definitions(HERMES_LVH_PEN_TOUCH=1)
-
-    # Remove legacy implementations so the same callbacks are never mapped
-    # through both virtual-input libraries.
-    list(FILTER INPUTTINO_SOURCES EXCLUDE REGEX "/inputtino_(pen|touch)\\.cpp$")
-    list(APPEND PLATFORM_TARGET_FILES
-            "${CMAKE_SOURCE_DIR}/src/platform/linux/input/virtualhid_pen_touch.h"
-            "${CMAKE_SOURCE_DIR}/src/platform/linux/input/virtualhid_pen_touch.cpp")
-    message(STATUS "Hermes experimental pen/touch backend: MrOz59/libvirtualhid")
-endif()
-list(APPEND PLATFORM_TARGET_FILES ${INPUTTINO_SOURCES})
-
-# build libevdev before the libinputtino target
+# Build an externally-fetched libevdev before libvirtualhid consumes it.
 if(EXTERNAL_PROJECT_LIBEVDEV_USED)
-    add_dependencies(libinputtino libevdev)
+    add_dependencies(libvirtualhid libevdev)
 endif()
 
 # AppImage and Flatpak

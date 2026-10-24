@@ -597,7 +597,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
-### ds5_inputtino_randomize_mac
+### ds5_virtualhid_randomize_mac
 
 <table>
     <tr>
@@ -616,10 +616,13 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            ds5_inputtino_randomize_mac = enabled
+            ds5_virtualhid_randomize_mac = enabled
             @endcode</td>
     </tr>
 </table>
+
+The former `ds5_inputtino_randomize_mac` key is accepted as a compatibility
+alias; new configurations should use the key above.
 
 ### back_button_timeout
 

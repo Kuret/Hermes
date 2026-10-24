@@ -573,7 +573,7 @@ namespace config {
     true,  // back as touchpad click enabled (manual DS4 only)
     true,  // client gamepads with motion events are emulated as DS4
     true,  // client gamepads with touchpads are emulated as DS4
-    true,  // ds5_inputtino_randomize_mac
+    true,  // ds5_virtualhid_randomize_mac
 
     true,  // keyboard enabled
     true,  // mouse enabled
@@ -721,6 +721,15 @@ namespace config {
     return keys;
   }
 
+  static void normalize_input_config_alias(std::unordered_map<std::string, std::string> &vars) {
+    auto legacy = vars.extract("ds5_inputtino_randomize_mac");
+    if (!legacy.empty()) {
+      legacy.key() = "ds5_virtualhid_randomize_mac";
+      // insert preserves an explicitly supplied canonical value.
+      vars.insert(std::move(legacy));
+    }
+  }
+
   std::unordered_map<std::string, std::string> parse_config(const ::std::string_view &file_content) {
     std::unordered_map<std::string, std::string> vars;
 
@@ -743,6 +752,9 @@ namespace config {
       vars.emplace(std::move(*var));
     }
 
+    // Canonicalize here as well as at apply time so the configuration UI sees
+    // an older saved value instead of silently showing the new key's default.
+    normalize_input_config_alias(vars);
     return vars;
   }
 
@@ -1139,6 +1151,7 @@ namespace config {
   }
 
   void apply_config(std::unordered_map<std::string, std::string> &&vars) {
+    normalize_input_config_alias(vars);
 #ifndef __ANDROID__
     // TODO: Android can possibly support this
     if (!fs::exists(stream.file_apps.c_str())) {
@@ -1355,7 +1368,7 @@ namespace config {
     bool_f(vars, "ds4_back_as_touchpad_click", input.ds4_back_as_touchpad_click);
     bool_f(vars, "motion_as_ds4", input.motion_as_ds4);
     bool_f(vars, "touchpad_as_ds4", input.touchpad_as_ds4);
-    bool_f(vars, "ds5_inputtino_randomize_mac", input.ds5_inputtino_randomize_mac);
+    bool_f(vars, "ds5_virtualhid_randomize_mac", input.ds5_virtualhid_randomize_mac);
 
     bool_f(vars, "mouse", input.mouse);
     bool_f(vars, "keyboard", input.keyboard);
