@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 // lib includes
@@ -24,6 +25,7 @@ extern "C" {
 // local includes
 #include "cuda.h"
 #include "cuda_upload_lifetime.h"
+#include "dmabuf_import_cache.h"
 #include "graphics.h"
 #include "src/logging.h"
 #include "src/utility.h"
@@ -413,11 +415,27 @@ namespace cuda {
   };
 
   /**
-   * @brief Opens the DRM device associated with the CUDA device index.
+   * Which DRM node of the CUDA device to build the GBM/EGL importer on.
+   *
+   * Importing DMA-BUFs and rendering into textures needs no KMS, which is
+   * what render nodes exist for. Opening the primary node instead hands the
+   * opener DRM master implicitly whenever nobody holds it yet, which can take
+   * the card from a greeter or compositor that starts after Hermes - the
+   * pre-login hosting case. The primary node stays as a fallback for driver
+   * stacks whose GBM/EGL platform cannot initialise on a render node.
+   */
+  enum class drm_node_e {
+    render,
+    primary,
+  };
+
+  /**
+   * @brief Opens a DRM node of the GPU behind a CUDA device index.
    * @param index CUDA device index to open.
+   * @param node Which node of that GPU to open.
    * @return File descriptor or -1 on failure.
    */
-  file_t open_drm_fd_for_cuda_device(int index) {
+  file_t open_drm_fd_for_cuda_device(int index, drm_node_e node) {
     CUdevice device;
     CU_CHECK(cdf->cuDeviceGet(&device, index), "Couldn't get CUDA device");
 
@@ -432,7 +450,7 @@ namespace cuda {
       return std::tolower(c);
     });
 
-    // Look for the name of the primary node in sysfs
+    const auto prefix = node == drm_node_e::render ? "renderD"sv : "card"sv;
     try {
       char sysfs_path[PATH_MAX];
       std::snprintf(sysfs_path, sizeof(sysfs_path), "/sys/bus/pci/devices/%s/drm", pci_bus_id.data());
@@ -440,22 +458,46 @@ namespace cuda {
       for (auto &entry : fs::directory_iterator {sysfs_dir}) {
         auto file = entry.path().filename();
         auto filestring = file.generic_string();
-        if (std::string_view {filestring}.substr(0, 4) != "card"sv) {
+        if (std::string_view {filestring}.substr(0, prefix.size()) != prefix) {
           continue;
         }
 
-        BOOST_LOG(debug) << "Found DRM primary node: "sv << filestring;
-
         fs::path dri_path {"/dev/dri"sv};
         auto device_path = dri_path / file;
-        return open(device_path.c_str(), O_RDWR);
+        BOOST_LOG(debug) << "Found DRM "sv << (node == drm_node_e::render ? "render"sv : "primary"sv)
+                         << " node for CUDA device "sv << index << ": "sv << device_path.native();
+        return open(device_path.c_str(), O_RDWR | O_CLOEXEC);
       }
     } catch (const std::filesystem::filesystem_error &err) {
       BOOST_LOG(error) << "Failed to read sysfs: "sv << err.what();
     }
 
-    BOOST_LOG(error) << "Unable to find DRM device with PCI bus ID: "sv << pci_bus_id.data();
+    BOOST_LOG(node == drm_node_e::render ? debug : error)
+      << "Unable to find a DRM "sv << (node == drm_node_e::render ? "render"sv : "primary"sv)
+      << " node with PCI bus ID: "sv << pci_bus_id.data();
     return -1;
+  }
+
+  /**
+   * HERMES_CUDA_EGL_IMPORT_CACHE: how many DMA-BUF imports the GL->CUDA
+   * consumer keeps. Unset uses the default; 0 imports every frame as before.
+   */
+  std::size_t egl_import_cache_capacity() {
+    constexpr std::size_t default_capacity = 4;
+    constexpr unsigned long max_capacity = 16;
+    const char *setting = std::getenv("HERMES_CUDA_EGL_IMPORT_CACHE");
+    if (!setting || !*setting) {
+      return default_capacity;
+    }
+    char *end = nullptr;
+    errno = 0;
+    const unsigned long parsed = std::strtoul(setting, &end, 10);
+    if (errno || !end || *end || *setting == '-' || parsed > max_capacity) {
+      BOOST_LOG(warning) << "Ignoring HERMES_CUDA_EGL_IMPORT_CACHE="sv << setting
+                         << "; expected 0.."sv << max_capacity << ". Using "sv << default_capacity << '.';
+      return default_capacity;
+    }
+    return static_cast<std::size_t>(parsed);
   }
 
   class gl_cuda_vram_t: public platf::avcodec_encode_device_t {
@@ -472,11 +514,62 @@ namespace cuda {
       // This must be non-zero to tell the video core that it's a hardware encoding device.
       data = (void *) 0x1;
 
-      // TODO: Support more than one CUDA device
-      file = std::move(open_drm_fd_for_cuda_device(0));
+      // TODO: Support more than one CUDA device. FFmpeg's CUDA hwcontext
+      // opens device 0 as well, so the importer must stay on that GPU.
+      if (init_importer(drm_node_e::render)) {
+        BOOST_LOG(warning) << "GL->CUDA importer could not start on the CUDA GPU's render node; "
+                              "retrying on its primary node."sv;
+        if (init_importer(drm_node_e::primary)) {
+          return -1;
+        }
+      }
+
+      const auto import_capacity = egl_import_cache_capacity();
+      imports.resize(import_capacity);
+      if (import_capacity) {
+        BOOST_LOG(info) << "GL->CUDA DMA-BUF import cache: up to "sv << import_capacity << " buffers"sv;
+      } else {
+        BOOST_LOG(info) << "GL->CUDA DMA-BUF import cache disabled (HERMES_CUDA_EGL_IMPORT_CACHE=0)"sv;
+      }
+
+      width = in_width;
+      height = in_height;
+
+      sequence = 0;
+
+      this->offset_x = offset_x;
+      this->offset_y = offset_y;
+
+      return 0;
+    }
+
+    ~gl_cuda_vram_t() override {
+      if (imports.enabled()) {
+        BOOST_LOG(debug) << "GL->CUDA DMA-BUF import cache: "sv << imports.hits() << " hits, "sv
+                         << imports.misses() << " imports, "sv << imports.evictions() << " evictions"sv;
+      }
+    }
+
+    /**
+     * @brief Build the GBM device, EGL display and GL context on one DRM node
+     *        of the CUDA GPU, releasing whatever it created if a step fails.
+     * @param node Render node first; the primary node is only a fallback.
+     * @return 0 on success or -1 on failure.
+     */
+    int init_importer(drm_node_e node) {
+      auto release = util::fail_guard([&]() {
+        ctx = egl::ctx_t {};
+        display.reset();
+        gbm.reset();
+        file = file_t {};
+      });
+
+      file = open_drm_fd_for_cuda_device(0, node);
       if (file.el < 0) {
-        char string[1024];
-        BOOST_LOG(error) << "Couldn't open DRM FD for CUDA device: "sv << strerror_r(errno, string, sizeof(string));
+        if (node == drm_node_e::primary) {
+          char string[1024];
+          BOOST_LOG(error) << "Couldn't open DRM FD for CUDA device: "sv << strerror_r(errno, string, sizeof(string));
+        }
         return -1;
       }
 
@@ -497,16 +590,39 @@ namespace cuda {
       }
 
       ctx = std::move(*ctx_opt);
-
-      width = in_width;
-      height = in_height;
-
-      sequence = 0;
-
-      this->offset_x = offset_x;
-      this->offset_y = offset_y;
-
+      release.disable();
       return 0;
+    }
+
+    /**
+     * @brief Import a captured DMA-BUF, or reuse the import made for the same
+     *        buffer and layout earlier.
+     * @param sd Descriptor whose fds stay owned by the captured image.
+     * @return The texture source, or nullptr when the import failed.
+     */
+    egl::rgb_t *import_frame(const egl::surface_descriptor_t &sd) {
+      std::optional<platf::dmabuf::identity_t> identity;
+      if (imports.enabled()) {
+        identity = platf::dmabuf::identify(sd.width, sd.height, sd.fourcc, sd.modifier, sd.fds, sd.pitches, sd.offsets);
+        if (identity) {
+          if (auto cached = imports.find(*identity)) {
+            return cached;
+          }
+        }
+      }
+
+      // Uncached: release the previous import before creating the next one,
+      // as this consumer always has.
+      rgb = egl::rgb_t {};
+      auto rgb_opt = egl::import_source(display.get(), sd);
+      if (!rgb_opt) {
+        return nullptr;
+      }
+      if (identity) {
+        return imports.insert(*identity, std::move(*rgb_opt));
+      }
+      rgb = std::move(*rgb_opt);
+      return &rgb;
     }
 
     /**
@@ -568,22 +684,23 @@ namespace cuda {
       if (descriptor.sequence == 0) {
         // For dummy images, use a blank RGB texture instead of importing a DMA-BUF
         rgb = egl::create_blank(img);
+        source = &rgb;
       } else if (descriptor.sequence > sequence) {
         sequence = descriptor.sequence;
 
-        rgb = egl::rgb_t {};
-
-        auto rgb_opt = egl::import_source(display.get(), descriptor.sd);
-
-        if (!rgb_opt) {
+        source = import_frame(descriptor.sd);
+        if (!source) {
           return -1;
         }
+      }
 
-        rgb = std::move(*rgb_opt);
+      if (!source) {
+        BOOST_LOG(error) << "GL->CUDA convert called before any frame was imported"sv;
+        return -1;
       }
 
       // Perform the color conversion and scaling in GL
-      sws.load_vram(descriptor, offset_x, offset_y, rgb->tex[0]);
+      sws.load_vram(descriptor, offset_x, offset_y, (*source)->tex[0]);
       if (sws.convert(nv12->buf)) {
         return -1;
       }
@@ -644,6 +761,10 @@ namespace cuda {
 
     std::uint64_t sequence;
     egl::rgb_t rgb;
+    // Imports of the buffers the producer rotates through; destroyed before
+    // the context and display above. `source` points into it or at `rgb`.
+    platf::dmabuf::import_cache_t<egl::rgb_t> imports;
+    egl::rgb_t *source {nullptr};
 
     registered_resource_t y_res;
     registered_resource_t uv_res;
