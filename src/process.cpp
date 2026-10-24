@@ -1267,8 +1267,9 @@ namespace proc {
         runtime->env.erase(name);
       }
 
-      // These opt-ins target downstream Gamescope builds with explicit DRM
-      // device selection. Standard Gamescope builds need no extra arguments.
+      // Explicit scanout device selection requires a patched Gamescope.
+      // relil/gamescope-eGPU uses --prefer-drm; older downstream builds
+      // may expose --drm-device. Keep both as explicit opt-ins.
       std::string gamescope_options;
       if (const char *drm_device = std::getenv("HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE");
           drm_device && *drm_device) {
@@ -1280,7 +1281,16 @@ namespace proc {
                                 std::all_of(card_name.begin() + 4, card_name.end(),
                                             [](unsigned char ch) { return std::isdigit(ch) != 0; });
         if (valid_card) {
-          gamescope_options += " --drm-device " + device;
+          const char *selector = std::getenv("HERMES_ISOLATED_GAMESCOPE_DRM_FLAG");
+          const std::string_view flag = selector && *selector ?
+                                          std::string_view {selector} :
+                                          std::string_view {"--drm-device"};
+          if (flag == "--drm-device" || flag == "--prefer-drm") {
+            gamescope_options += " " + std::string {flag} + " " + device;
+          } else {
+            BOOST_LOG(warning) << "[IsolatedSession] Unsupported Gamescope DRM selector; "
+                               << "expected --drm-device or --prefer-drm.";
+          }
         } else {
           BOOST_LOG(warning) << "[IsolatedSession] Ignoring invalid HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE: "
                              << device;
