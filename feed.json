@@ -12,6 +12,20 @@
       "expires": "2026-11-05",
       "dismissible": true,
       "revision": 2
+    },
+    {
+      "id": "nvidia-zero-copy-testers-2026",
+      "level": "info",
+      "channel": "all",
+      "title": "NVIDIA users: help test zero-copy capture",
+      "body": "We're working on NVENC capture without CPU copies, but have no NVIDIA card to validate it. If you stream from an NVIDIA GPU on Linux, please try the experimental/nvidia-zero-copy branches of Hermes and Hermes-KMS.\n\nStart with the Hermes-KMS checks (hermes-import-cache-check needs no compositor), then stream with HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto. Both pull requests list the steps.\n\nThis is experimental: use a test session, as the NVIDIA driver may crash. Without the variable, Hermes keeps the current CPU copy.\n\nPlease post your results with GPU, driver, kernel and KWin versions on:\nhttps://github.com/MrOz59/Hermes/pull/66\nhttps://github.com/MrOz59/Hermes-KMS/pull/15",
+      "link": {
+        "url": "https://github.com/MrOz59/Hermes/pull/66",
+        "label": "Test plan and results"
+      },
+      "expires": "2026-12-15",
+      "dismissible": true,
+      "revision": 1
     }
   ]
 }
