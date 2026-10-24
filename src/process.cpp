@@ -1256,15 +1256,49 @@ namespace proc {
         return -1;
       }
 
+      // A standalone DRM Gamescope must not inherit the desktop's display
+      // sockets: otherwise it can accidentally choose a nested backend.
+      // The isolated session owns its own Wayland and Xwayland servers.
+      for (const auto *name : {"WAYLAND_DISPLAY", "WAYLAND_SOCKET",
+                               "_WAYLAND_DISPLAY", "DISPLAY",
+                               "HERMES_WAYLAND_DISPLAY"}) {
+        runtime->env.erase(name);
+      }
+
+      // These opt-ins target downstream Gamescope builds with explicit DRM
+      // device selection. Standard Gamescope builds need no extra arguments.
+      std::string gamescope_options;
+      if (const char *drm_device = std::getenv("HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE");
+          drm_device && *drm_device) {
+        const std::string device {drm_device};
+        const auto card_name = std::filesystem::path {device}.filename().string();
+        const bool valid_card = device == "/dev/dri/" + card_name &&
+                                card_name.starts_with("card") &&
+                                card_name.size() > 4 &&
+                                std::all_of(card_name.begin() + 4, card_name.end(),
+                                            [](unsigned char ch) { return std::isdigit(ch) != 0; });
+        if (valid_card) {
+          gamescope_options += " --drm-device " + device;
+        } else {
+          BOOST_LOG(warning) << "[IsolatedSession] Ignoring invalid HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE: "
+                             << device;
+        }
+      }
+      if (const char *steam_mode = std::getenv("HERMES_ISOLATED_GAMESCOPE_STEAM_MODE");
+          steam_mode && std::string_view {steam_mode} == "1") {
+        gamescope_options += " -e";
+      }
+
       launch_command = std::format(
         "gamescope --backend=drm -W {} -H {} -w {} -h {} -r {} "
-        "--xwayland-count 1 --expose-wayland --force-windows-fullscreen{} -- {}",
+        "--xwayland-count 1 --expose-wayland --force-windows-fullscreen{}{} -- {}",
         width,
         height,
         width,
         height,
         refresh_hz,
         connector.empty() ? std::string {} : " -O " + connector,
+        gamescope_options,
         app.cmd
       );
     } else {
