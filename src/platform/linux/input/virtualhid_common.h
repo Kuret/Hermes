@@ -15,6 +15,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace platf {
@@ -29,6 +30,13 @@ namespace platf {
 
   namespace virtualhid {
     std::unique_ptr<lvh::Runtime> create_runtime();
+
+    /**
+     * @brief Compute advertised protocol capabilities from backend availability and input policy.
+     * @param backend Available libvirtualhid backend features.
+     * @return Only capabilities enabled in Hermes and supported by the backend.
+     */
+    platform_caps::caps_t input_capabilities(const lvh::BackendCapabilities &backend);
 
     lvh::DeviceProfile with_hermes_identity(lvh::DeviceProfile profile, const std::string &session_tag, const std::string &display_name);
 
@@ -62,9 +70,9 @@ namespace platf {
   };
 
   struct client_input_raw_t: public client_input_t {
-    explicit client_input_raw_t(input_t &input):
+    explicit client_input_raw_t(input_t &input, std::unique_ptr<lvh::Runtime> runtime = {}):
         global(static_cast<input_raw_t *>(input.get())),
-        virtualhid_devices(std::make_unique<virtualhid::client_devices_t>(global->session_tag)) {}
+        virtualhid_devices(std::make_unique<virtualhid::client_devices_t>(global->session_tag, std::move(runtime))) {}
 
     input_raw_t *global;
     std::unique_ptr<virtualhid::client_devices_t> virtualhid_devices;

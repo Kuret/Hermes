@@ -570,10 +570,10 @@ namespace config {
       platf::supported_gamepads(nullptr).front().name.data(),
       platf::supported_gamepads(nullptr).front().name.size(),
     },  // Default gamepad
-    true,  // back as touchpad click enabled (manual DS4 only)
+    true,  // Back as PlayStation touchpad click (Linux DS4/DS5, Windows manual DS4)
     true,  // client gamepads with motion events are emulated as DS4
     true,  // client gamepads with touchpads are emulated as DS4
-    true,  // ds5_virtualhid_randomize_mac
+    true,  // virtualhid_randomize_mac
 
     true,  // keyboard enabled
     true,  // mouse enabled
@@ -722,11 +722,13 @@ namespace config {
   }
 
   static void normalize_input_config_alias(std::unordered_map<std::string, std::string> &vars) {
-    auto legacy = vars.extract("ds5_inputtino_randomize_mac");
-    if (!legacy.empty()) {
-      legacy.key() = "ds5_virtualhid_randomize_mac";
-      // insert preserves an explicitly supplied canonical value.
-      vars.insert(std::move(legacy));
+    for (const auto alias : {"ds5_virtualhid_randomize_mac", "ds5_inputtino_randomize_mac"}) {
+      auto legacy = vars.extract(alias);
+      if (!legacy.empty()) {
+        legacy.key() = "virtualhid_randomize_mac";
+        // Canonical wins; otherwise prefer the newer alias over Inputtino.
+        vars.insert(std::move(legacy));
+      }
     }
   }
 
@@ -1368,7 +1370,7 @@ namespace config {
     bool_f(vars, "ds4_back_as_touchpad_click", input.ds4_back_as_touchpad_click);
     bool_f(vars, "motion_as_ds4", input.motion_as_ds4);
     bool_f(vars, "touchpad_as_ds4", input.touchpad_as_ds4);
-    bool_f(vars, "ds5_virtualhid_randomize_mac", input.ds5_virtualhid_randomize_mac);
+    bool_f(vars, "virtualhid_randomize_mac", input.virtualhid_randomize_mac);
 
     bool_f(vars, "mouse", input.mouse);
     bool_f(vars, "keyboard", input.keyboard);

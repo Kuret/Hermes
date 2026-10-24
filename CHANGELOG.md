@@ -60,6 +60,10 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   SDDM and Hermes-KMS only.
 
 ### Changed
+- Linux controller selection now offers all seven libvirtualhid profiles.
+  Automatic Xbox/unknown-controller selection uses Xbox Series; explicit
+  `xone` remains available. PlayStation MAC policy is now named
+  `virtualhid_randomize_mac`, with both former DS5-specific keys accepted.
 - Linux virtual input now uses the pinned MrOz59/libvirtualhid fork for the
   complete stack: keyboard, relative and absolute mouse, high-resolution
   scrolling, Xbox One/Switch Pro/DualSense controllers and their feedback,
@@ -83,6 +87,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Linux pen/touch capability advertisement and native packet handling now
+  respect input policy and backend availability. Stream cleanup releases
+  remapped keys, the fifth mouse button, controller input and active pen/touch
+  state only on the owning context. Startup controller probing now passes
+  the owning input handle rather than casting the backend payload.
 - Hermes opens Hermes-KMS control/capture render nodes with `O_RDONLY`. Updated
   Hermes-KMS udev policy grants the active or configured consumer read-only
   access, which still permits every private capture ioctl and exported fd but

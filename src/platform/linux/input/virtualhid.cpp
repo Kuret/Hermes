@@ -14,6 +14,17 @@
 using namespace std::literals;
 
 namespace platf::virtualhid {
+  platform_caps::caps_t input_capabilities(const lvh::BackendCapabilities &backend) {
+    platform_caps::caps_t capabilities = 0;
+    if (config::input.mouse && config::input.native_pen_touch && (backend.supports_touchscreen || backend.supports_pen_tablet)) {
+      capabilities |= platform_caps::pen_touch;
+    }
+    if (config::input.controller && backend.supports_gamepad && gamepad::supports_controller_extensions()) {
+      capabilities |= platform_caps::controller_touch;
+    }
+    return capabilities;
+  }
+
   std::unique_ptr<lvh::Runtime> create_runtime() {
     lvh::RuntimeOptions options;
     options.backend = lvh::BackendKind::platform_default;
@@ -125,6 +136,9 @@ namespace platf {
   }
 
   void touch_update(client_input_t *input, const touch_port_t &touch_port, const touch_input_t &touch) {
+    if ((!config::input.mouse || !config::input.native_pen_touch) && touch.eventType != LI_TOUCH_EVENT_CANCEL_ALL) {
+      return;
+    }
     auto *raw = static_cast<client_input_raw_t *>(input);
     if (raw && raw->virtualhid_devices) {
       virtualhid::touch_update(*raw->virtualhid_devices, touch_port, touch);
@@ -132,6 +146,9 @@ namespace platf {
   }
 
   void pen_update(client_input_t *input, const touch_port_t &touch_port, const pen_input_t &pen) {
+    if ((!config::input.mouse || !config::input.native_pen_touch) && pen.eventType != LI_TOUCH_EVENT_CANCEL_ALL) {
+      return;
+    }
     auto *raw = static_cast<client_input_raw_t *>(input);
     if (raw && raw->virtualhid_devices) {
       virtualhid::pen_update(*raw->virtualhid_devices, touch_port, pen);
@@ -163,11 +180,8 @@ namespace platf {
   }
 
   platform_caps::caps_t get_capabilities() {
-    platform_caps::caps_t capabilities = platform_caps::pen_touch;
-    if (config::input.gamepad == "ds5"sv || config::input.gamepad == "auto"sv) {
-      capabilities |= platform_caps::controller_touch;
-    }
-    return capabilities;
+    const auto runtime = virtualhid::create_runtime();
+    return runtime ? virtualhid::input_capabilities(runtime->capabilities()) : 0;
   }
 
   util::point_t get_mouse_loc(input_t &input) {

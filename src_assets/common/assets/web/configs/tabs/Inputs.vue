@@ -29,6 +29,10 @@ const config = ref(props.config)
 
         <PlatformLayout :platform="platform">
           <template #linux>
+            <option value="generic">{{ $t("config.gamepad_generic") }}</option>
+            <option value="x360">{{ $t("config.gamepad_x360") }}</option>
+            <option value="xseries">{{ $t("config.gamepad_xseries") }}</option>
+            <option value="ds4">{{ $t("config.gamepad_ds4") }}</option>
             <option value="ds5">{{ $t("config.gamepad_ds5") }}</option>
             <option value="switch">{{ $t("config.gamepad_switch") }}</option>
             <option value="xone">{{ $t("config.gamepad_xone") }}</option>
@@ -74,8 +78,8 @@ const config = ref(props.config)
                             default="true"
                   ></Checkbox>
                 </template>
-                <!-- DS4 option: DS4 back button as touchpad click (on Automatic: Windows only) -->
-                <template v-if="config.gamepad === 'ds4' || (config.gamepad === 'auto' && platform === 'windows')">
+                <!-- Back/Select can click any PlayStation-style virtual touchpad. -->
+                <template v-if="config.gamepad === 'ds4' || (platform === 'linux' && config.gamepad === 'ds5') || (config.gamepad === 'auto' && (platform === 'windows' || platform === 'linux'))">
                   <Checkbox class="mb-3"
                             id="ds4_back_as_touchpad_click"
                             locale-prefix="config"
@@ -83,12 +87,12 @@ const config = ref(props.config)
                             default="true"
                   ></Checkbox>
                 </template>
-                <!-- DS5 Option: Controller MAC randomization (on Automatic: Linux only) -->
-                <template v-if="config.gamepad === 'ds5' || (config.gamepad === 'auto' && platform === 'linux')">
+                <!-- Linux PlayStation profiles share the MAC identity policy. -->
+                <template v-if="platform === 'linux' && (config.gamepad === 'ds4' || config.gamepad === 'ds5' || config.gamepad === 'auto')">
                   <Checkbox class="mb-3"
-                            id="ds5_virtualhid_randomize_mac"
+                            id="virtualhid_randomize_mac"
                             locale-prefix="config"
-                            v-model="config.ds5_virtualhid_randomize_mac"
+                            v-model="config.virtualhid_randomize_mac"
                             default="true"
                   ></Checkbox>
                 </template>

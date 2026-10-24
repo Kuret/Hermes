@@ -27,6 +27,7 @@ jobs:
           pacman -S --noconfirm --needed \
             base-devel git cmake ninja boost openssl opus ffmpeg \
             libdrm wayland libx11 libxrandr libxfixes libxcb \
+            libxi libxtst libxss libxcursor libxkbcommon wayland-protocols \
             libva libvdpau libcap curl libevdev libinput sdl2 systemd \
             miniupnpc libpulse qt6-base qt6-svg npm nodejs \
             icu numactl

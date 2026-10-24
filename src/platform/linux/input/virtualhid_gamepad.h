@@ -13,5 +13,7 @@ namespace platf::gamepad {
   void touch(input_raw_t *raw, const gamepad_touch_t &touch);
   void motion(input_raw_t *raw, const gamepad_motion_t &motion);
   void battery(input_raw_t *raw, const gamepad_battery_t &battery);
+  /** @brief Whether the configured controller profile can expose motion or touchpad input. */
+  bool supports_controller_extensions();
   std::vector<supported_gamepad_t> &supported_gamepads(input_t *input);
 }  // namespace platf::gamepad

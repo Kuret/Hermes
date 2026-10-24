@@ -20,9 +20,24 @@ using namespace std::literals;
 namespace platf::gamepad {
   namespace {
     enum class controller_type {
+      generic,
+      xbox_360,
       xbox_one,
+      xbox_series,
+      dualshock4,
       dualsense,
       switch_pro,
+    };
+
+    /** @brief Configuration names and their matching Linux virtual HID profiles. */
+    constexpr std::array controller_profiles {
+      std::pair {"generic"sv, controller_type::generic},
+      std::pair {"x360"sv, controller_type::xbox_360},
+      std::pair {"xone"sv, controller_type::xbox_one},
+      std::pair {"xseries"sv, controller_type::xbox_series},
+      std::pair {"ds4"sv, controller_type::dualshock4},
+      std::pair {"ds5"sv, controller_type::dualsense},
+      std::pair {"switch"sv, controller_type::switch_pro},
     };
 
     bool valid_index(const input_raw_t *raw, int index) {
@@ -63,21 +78,15 @@ namespace platf::gamepad {
     }
 
     controller_type select_type(const gamepad_id_t &id, const gamepad_arrival_t &metadata) {
-      if (config::input.gamepad == "xone"sv) {
-        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox One controller (manual selection)";
-        return controller_type::xbox_one;
-      }
-      if (config::input.gamepad == "ds5"sv) {
-        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualSense controller (manual selection)";
-        return controller_type::dualsense;
-      }
-      if (config::input.gamepad == "switch"sv) {
-        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Nintendo Pro controller (manual selection)";
-        return controller_type::switch_pro;
+      for (const auto &[name, type] : controller_profiles) {
+        if (config::input.gamepad == name) {
+          BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will use " << name << " (manual selection)";
+          return type;
+        }
       }
       if (metadata.type == LI_CTYPE_XBOX) {
-        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox One controller (client type)";
-        return controller_type::xbox_one;
+        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox Series controller (client type)";
+        return controller_type::xbox_series;
       }
       if (metadata.type == LI_CTYPE_PS) {
         BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualSense controller (client type)";
@@ -96,12 +105,12 @@ namespace platf::gamepad {
         return controller_type::dualsense;
       }
 
-      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox One controller (default)";
-      return controller_type::xbox_one;
+      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox Series controller (default)";
+      return controller_type::xbox_series;
     }
 
-    std::string dualsense_stable_id(int global_index, std::string_view session_tag) {
-      if (config::input.ds5_virtualhid_randomize_mac) {
+    std::string playstation_stable_id(int global_index, std::string_view session_tag) {
+      if (config::input.virtualhid_randomize_mac) {
         // A libvirtualhid Runtime numbers devices locally. Leaving stable_id
         // empty would therefore give the first DualSense in every isolated
         // Runtime the same generated MAC. Preserve the configuration's actual
@@ -148,9 +157,25 @@ namespace platf::gamepad {
     lvh::DeviceProfile profile_for(controller_type type, const std::string &session_tag) {
       lvh::DeviceProfile profile;
       switch (type) {
+        case controller_type::generic:
+          profile = lvh::profiles::generic_gamepad();
+          profile.name = "Sunshine Generic (virtual) pad";
+          break;
+        case controller_type::xbox_360:
+          profile = lvh::profiles::xbox_360();
+          profile.name = "Sunshine X-Box 360 (virtual) pad";
+          break;
         case controller_type::xbox_one:
           profile = lvh::profiles::xbox_one();
           profile.name = "Sunshine X-Box One (virtual) pad";
+          break;
+        case controller_type::xbox_series:
+          profile = lvh::profiles::xbox_series();
+          profile.name = "Sunshine X-Box Series (virtual) pad";
+          break;
+        case controller_type::dualshock4:
+          profile = lvh::profiles::dualshock4();
+          profile.name = "Sunshine PS4 (virtual) pad";
           break;
         case controller_type::dualsense:
           profile = lvh::profiles::dualsense_usb();
@@ -176,8 +201,8 @@ namespace platf::gamepad {
       options.metadata.has_rgb_led = (metadata.capabilities & LI_CCAP_RGB_LED) != 0;
       options.metadata.has_battery = (metadata.capabilities & LI_CCAP_BATTERY_STATE) != 0;
 
-      if (type == controller_type::dualsense) {
-        options.metadata.stable_id = dualsense_stable_id(id.globalIndex, session_tag);
+      if (type == controller_type::dualsense || type == controller_type::dualshock4) {
+        options.metadata.stable_id = playstation_stable_id(id.globalIndex, session_tag);
       } else {
         options.metadata.stable_id = session_tag.empty() ? std::format("gamepad-{}", id.globalIndex) : std::format("{}-gamepad-{}", session_tag, id.globalIndex);
       }
@@ -185,12 +210,12 @@ namespace platf::gamepad {
     }
 
     void warn_unsupported_client_features(controller_type type, const lvh::GamepadProfileSupport &support, int index, const gamepad_arrival_t &metadata) {
-      if (type == controller_type::dualsense) {
+      if (type == controller_type::dualsense || type == controller_type::dualshock4) {
         if (!(metadata.capabilities & (LI_CCAP_ACCEL | LI_CCAP_GYRO))) {
-          BOOST_LOG(warning) << "Gamepad " << index << " emulates DualSense without client motion sensors";
+          BOOST_LOG(warning) << "Gamepad " << index << " emulates PlayStation without client motion sensors";
         }
         if (!(metadata.capabilities & LI_CCAP_TOUCHPAD)) {
-          BOOST_LOG(warning) << "Gamepad " << index << " emulates DualSense without a client touchpad";
+          BOOST_LOG(warning) << "Gamepad " << index << " emulates PlayStation without a client touchpad";
         }
         return;
       }
@@ -358,6 +383,9 @@ namespace platf::gamepad {
     set_button(state.buttons, input.buttonFlags, DPAD_RIGHT, lvh::GamepadButton::dpad_right);
     set_button(state.buttons, input.buttonFlags, MISC_BUTTON, lvh::GamepadButton::misc1);
     set_button(state.buttons, input.buttonFlags, TOUCHPAD_BUTTON, lvh::GamepadButton::touchpad);
+    if (gamepad->adapter->support().supports_touchpad && config::input.ds4_back_as_touchpad_click && (input.buttonFlags & BACK)) {
+      state.buttons.set(lvh::GamepadButton::touchpad);
+    }
     set_button(state.buttons, input.buttonFlags, PADDLE1, lvh::GamepadButton::paddle1);
     set_button(state.buttons, input.buttonFlags, PADDLE2, lvh::GamepadButton::paddle2);
     set_button(state.buttons, input.buttonFlags, PADDLE3, lvh::GamepadButton::paddle3);
@@ -478,10 +506,27 @@ namespace platf::gamepad {
     virtualhid::log_failure("gamepad battery", gamepad->adapter->set_state(state));
   }
 
+  bool supports_controller_extensions() {
+    if (config::input.gamepad == "auto"sv) {
+      return true;
+    }
+    for (const auto &[name, type] : controller_profiles) {
+      if (config::input.gamepad == name) {
+        const auto &support = lvh::gamepad_profile_support(profile_for(type, {}));
+        return support.supports_touchpad || support.supports_motion;
+      }
+    }
+    return false;
+  }
+
   std::vector<supported_gamepad_t> &supported_gamepads(input_t *input) {
     static std::vector options {
       supported_gamepad_t {"auto", true, ""},
+      supported_gamepad_t {"generic", false, "Input backend has not been initialized"},
+      supported_gamepad_t {"x360", false, "Input backend has not been initialized"},
       supported_gamepad_t {"xone", false, "Input backend has not been initialized"},
+      supported_gamepad_t {"xseries", false, "Input backend has not been initialized"},
+      supported_gamepad_t {"ds4", false, "Input backend has not been initialized"},
       supported_gamepad_t {"ds5", false, "Input backend has not been initialized"},
       supported_gamepad_t {"switch", false, "Input backend has not been initialized"},
     };
@@ -496,10 +541,9 @@ namespace platf::gamepad {
 
     const gamepad_id_t probe_id {.globalIndex = MAX_GAMEPADS - 1, .clientRelativeIndex = 0};
     const gamepad_arrival_t probe_metadata {.type = LI_CTYPE_UNKNOWN, .capabilities = 0, .supportedButtons = 0};
-    const std::array types {controller_type::xbox_one, controller_type::dualsense, controller_type::switch_pro};
-    for (std::size_t index = 0; index < types.size(); ++index) {
+    for (std::size_t index = 0; index < controller_profiles.size(); ++index) {
       auto created = raw->runtime->create_gamepad(
-        creation_options(types[index], probe_id, probe_metadata, raw->session_tag)
+        creation_options(controller_profiles[index].second, probe_id, probe_metadata, raw->session_tag)
       );
       options[index + 1].is_enabled = static_cast<bool>(created);
       options[index + 1].reason_disabled = created ? "" : created.status.message();
@@ -508,6 +552,10 @@ namespace platf::gamepad {
                            << options[index + 1].reason_disabled;
       }
     }
+    options.front().is_enabled = std::ranges::any_of(options.begin() + 1, options.end(), [](const auto &option) {
+      return option.is_enabled;
+    });
+    options.front().reason_disabled = options.front().is_enabled ? "" : "No virtual gamepad profile is available";
     return options;
   }
 }  // namespace platf::gamepad

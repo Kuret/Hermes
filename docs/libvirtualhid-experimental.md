@@ -24,7 +24,7 @@ kernel devices.
 | --- | --- |
 | Relative and absolute mouse, five buttons, horizontal and vertical high-resolution scroll | `lvh::Mouse` |
 | Keyboard and UTF-8 text | `lvh::Keyboard` |
-| Xbox One, DualSense and Switch Pro controllers | `lvh::GamepadStateAdapter` |
+| Generic HID, Xbox 360/One/Series, DualShock 4, DualSense and Switch Pro controllers | `lvh::GamepadStateAdapter` |
 | Controller touchpad, motion and battery | cached `lvh::GamepadState` |
 | Rumble, trigger rumble, RGB LED and adaptive triggers | `lvh::GamepadOutput` callback |
 | Multitouch, hover and cancel-all | `lvh::Touchscreen` |
@@ -33,6 +33,30 @@ kernel devices.
 Hermes still owns GameStream packet parsing, client permissions, keyboard
 repeat and feedback messages. The adapter translates those contracts into
 libvirtualhid state and reports.
+
+## Configuration and client negotiation
+
+The Hermes web UI's Input tab selects the emulated controller. With `gamepad =
+auto`, PlayStation, Nintendo and Xbox client types select DualSense, Switch Pro
+and Xbox Series respectively. For an unknown client type, `motion_as_ds4` and
+`touchpad_as_ds4` can select DualSense; otherwise Xbox Series is used. A manual
+profile always overrides this detection. `xone` remains available explicitly.
+Back/Select can click the virtual DS4/DS5 touchpad using
+`ds4_back_as_touchpad_click`. `virtualhid_randomize_mac` controls both
+PlayStation profiles and accepts the two older DS5-specific configuration keys.
+
+Mouse/keyboard/controller switches gate their input paths. Native pen/touch
+advertisement also requires `mouse`, `native_pen_touch` and an available backend.
+Native packets are rejected when disabled, except cancel-all cleanup. On the
+Android client, MultiTouch sends touchscreen input; absolute/trackpad modes
+send mouse input. Pen input follows its own tool-aware path. No client mode
+turns missing hardware pressure or motion sensors into real measurements.
+
+Stopping a stream releases mapped keys, all five mouse buttons, gamepad
+buttons/axes and active touch/pen state only on its owning input context.
+Isolated contexts are not retained after their seat/compositor is destroyed.
+Sunshine's global retained-gamepad lifecycle must not be copied across private
+seats; a new isolated stream gets a new context.
 
 ## Isolated sessions
 
@@ -50,7 +74,7 @@ controller drivers create their input children two levels below the HID device
 and may clear `input/phys`, so the rule propagates the seat from the HID parent
 to every `input`, `event`, `js` and `hidraw` child. Device names are not used as
 the isolation boundary. DualSense MACs are randomized by default; deterministic
-mode includes the private session identity so two seats cannot alias each
+mode includes the private session identity for both DS4 and DS5 so two seats cannot alias each
 other. Switch Pro initialization also advertises a distinct, session-scoped
 MAC rather than the formerly fixed protocol MAC.
 
@@ -96,9 +120,11 @@ cmake --build build --target sunshine test_sunshine -j2
 scripts/vm-isolated-input-test.sh /absolute/path/to/build/tests/test_sunshine
 ```
 
-Validation on 2026-10-24 passed 193 library tests (one xpadneo-specific test
-skipped), 16 Hermes adapter/configuration tests, and all 14 tests in the VM
-adapter run. The VM run exercised Xbox One, DualSense and Switch Pro with
+Library baseline validation on 2026-10-24 passed 193 tests (one xpadneo-specific
+test skipped). The expanded adapter validation passed 37 local tests covering
+input translation, reset, configuration, locales, coordinates and schema, and
+all 25 tests in the VM adapter run. The VM run exercised Generic HID,
+Xbox 360/One/Series, DualShock 4, DualSense and Switch Pro with
 independent keyboard, relative/absolute mouse, touch and pen devices on
 `hermes-kms-1` and `hermes-kms-12`. For each controller profile it replayed
 1000 batches at a target rate of 1000 Hz; each batch contained keyboard, mouse,

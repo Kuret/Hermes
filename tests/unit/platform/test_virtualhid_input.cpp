@@ -4,6 +4,8 @@
  */
 #ifdef __linux__
   #include "../../tests_common.h"
+  #include "src/globals.h"
+  #include "src/input.h"
   #include "src/platform/linux/input/virtualhid_common.h"
   #include "src/platform/linux/input/virtualhid_gamepad.h"
   #include "src/platform/linux/input/virtualhid_keyboard.h"
@@ -21,6 +23,7 @@
   #include <iostream>
   #include <limits>
   #include <linux/input.h>
+  #include <moonlight-common-c/src/Input.h>
   #include <set>
   #include <sys/ioctl.h>
   #include <sys/stat.h>
@@ -45,7 +48,11 @@ namespace {
 
     void SetUp() override {
       config::input.gamepad = "ds5";
-      config::input.ds5_virtualhid_randomize_mac = false;
+      config::input.virtualhid_randomize_mac = false;
+      config::input.mouse = true;
+      config::input.keyboard = true;
+      config::input.controller = true;
+      config::input.native_pen_touch = true;
     }
 
     void TearDown() override {
@@ -136,8 +143,8 @@ namespace {
 
   TEST_F(VirtualHidInputTest, GamepadSelectionAndStatePreserveHermesContracts) {
     platf::input_raw_t raw {"hermes-kms-1", fake_runtime()};
-    const std::array names {"xone", "ds5", "switch"};
-    const std::array kinds {lvh::GamepadProfileKind::xbox_one, lvh::GamepadProfileKind::dualsense, lvh::GamepadProfileKind::switch_pro};
+    const std::array names {"generic", "x360", "xone", "xseries", "ds4", "ds5", "switch"};
+    const std::array kinds {lvh::GamepadProfileKind::generic, lvh::GamepadProfileKind::xbox_360, lvh::GamepadProfileKind::xbox_one, lvh::GamepadProfileKind::xbox_series, lvh::GamepadProfileKind::dualshock4, lvh::GamepadProfileKind::dualsense, lvh::GamepadProfileKind::switch_pro};
     for (std::size_t index = 0; index < names.size(); ++index) {
       config::input.gamepad = names[index];
       ASSERT_EQ(platf::gamepad::alloc(&raw, {0, 3}, {}, feedback), 0);
@@ -170,7 +177,7 @@ namespace {
 
     config::input.gamepad = "auto";
     for (const auto [client, kind] : std::array {
-           std::pair {LI_CTYPE_XBOX, lvh::GamepadProfileKind::xbox_one},
+           std::pair {LI_CTYPE_XBOX, lvh::GamepadProfileKind::xbox_series},
            std::pair {LI_CTYPE_PS, lvh::GamepadProfileKind::dualsense},
            std::pair {LI_CTYPE_NINTENDO, lvh::GamepadProfileKind::switch_pro}
          }) {
@@ -178,6 +185,175 @@ namespace {
       EXPECT_EQ(raw.gamepads[0]->adapter->gamepad()->profile().gamepad_kind, kind);
       platf::gamepad::free(&raw, 0);
     }
+  }
+
+  TEST_F(VirtualHidInputTest, AutoSelectionUsesUnknownCapabilitiesButManualSelectionWins) {
+    platf::input_raw_t raw {"hermes-kms-12", fake_runtime()};
+    const auto select = [&](const char *name, std::uint8_t client, std::uint16_t capabilities) {
+      config::input.gamepad = name;
+      EXPECT_EQ(platf::gamepad::alloc(&raw, {0, 0}, {.type = client, .capabilities = capabilities}, feedback), 0);
+      const auto kind = raw.gamepads[0]->adapter->gamepad()->profile().gamepad_kind;
+      platf::gamepad::free(&raw, 0);
+      return kind;
+    };
+    config::input.motion_as_ds4 = true;
+    config::input.touchpad_as_ds4 = true;
+    EXPECT_EQ(select("auto", LI_CTYPE_UNKNOWN, 0), lvh::GamepadProfileKind::xbox_series);
+    EXPECT_EQ(select("auto", LI_CTYPE_UNKNOWN, LI_CCAP_GYRO), lvh::GamepadProfileKind::dualsense);
+    EXPECT_EQ(select("auto", LI_CTYPE_UNKNOWN, LI_CCAP_TOUCHPAD), lvh::GamepadProfileKind::dualsense);
+    EXPECT_EQ(select("auto", LI_CTYPE_XBOX, LI_CCAP_GYRO), lvh::GamepadProfileKind::xbox_series);
+    config::input.motion_as_ds4 = false;
+    config::input.touchpad_as_ds4 = false;
+    EXPECT_EQ(select("auto", LI_CTYPE_UNKNOWN, LI_CCAP_GYRO | LI_CCAP_TOUCHPAD), lvh::GamepadProfileKind::xbox_series);
+    EXPECT_EQ(select("xone", LI_CTYPE_PS, LI_CCAP_GYRO), lvh::GamepadProfileKind::xbox_one);
+    EXPECT_EQ(select("ds4", LI_CTYPE_XBOX, 0), lvh::GamepadProfileKind::dualshock4);
+  }
+
+  TEST_F(VirtualHidInputTest, EveryManualProfileIsExposedWithoutLeavingProbeDevices) {
+    platf::input_t input {new platf::input_raw_t("hermes-kms-12", fake_runtime())};
+    auto *raw = static_cast<platf::input_raw_t *>(input.get());
+    const auto options = platf::supported_gamepads(std::addressof(input));
+    ASSERT_EQ(options.size(), 8U);
+    const std::array names {"auto", "generic", "x360", "xone", "xseries", "ds4", "ds5", "switch"};
+    for (std::size_t index = 0; index < names.size(); ++index) {
+      EXPECT_EQ(options[index].name, names[index]);
+      EXPECT_TRUE(options[index].is_enabled);
+    }
+    EXPECT_EQ(raw->runtime->active_device_count(), 2U);
+  }
+
+  TEST_F(VirtualHidInputTest, AdvertisedCapabilitiesRequireEnabledInputAndAvailableBackend) {
+    lvh::BackendCapabilities backend {};
+    EXPECT_EQ(platf::virtualhid::input_capabilities(backend), 0);
+    backend.supports_touchscreen = true;
+    EXPECT_TRUE(platf::virtualhid::input_capabilities(backend) & platf::platform_caps::pen_touch);
+    config::input.native_pen_touch = false;
+    EXPECT_EQ(platf::virtualhid::input_capabilities(backend), 0);
+    config::input.native_pen_touch = true;
+    backend.supports_touchscreen = false;
+    backend.supports_pen_tablet = true;
+    EXPECT_TRUE(platf::virtualhid::input_capabilities(backend) & platf::platform_caps::pen_touch);
+    config::input.mouse = false;
+    EXPECT_EQ(platf::virtualhid::input_capabilities(backend), 0);
+    backend.supports_gamepad = true;
+    for (const auto *name : {"auto", "ds4", "ds5", "switch"}) {
+      config::input.gamepad = name;
+      EXPECT_TRUE(platf::virtualhid::input_capabilities(backend) & platf::platform_caps::controller_touch);
+    }
+    for (const auto *name : {"generic", "x360", "xone", "xseries"}) {
+      config::input.gamepad = name;
+      EXPECT_EQ(platf::virtualhid::input_capabilities(backend), 0);
+    }
+    config::input.gamepad = "ds4";
+    config::input.controller = false;
+    EXPECT_EQ(platf::virtualhid::input_capabilities(backend), 0);
+  }
+
+  TEST_F(VirtualHidInputTest, DisabledNativeInputRejectsPacketsButAllowsCancelCleanup) {
+    platf::input_t input {new platf::input_raw_t("hermes-kms-1", fake_runtime())};
+    platf::client_input_raw_t client {input, fake_runtime()};
+    auto &devices = *client.virtualhid_devices;
+    const platf::touch_port_t port {0, 0, 1920, 1080};
+    const platf::touch_input_t touch {.eventType = LI_TOUCH_EVENT_DOWN, .pointerId = 1, .x = 0.5F, .y = 0.5F};
+    const platf::pen_input_t pen {.eventType = LI_TOUCH_EVENT_DOWN, .toolType = LI_TOOL_TYPE_PEN, .penButtons = LI_PEN_BUTTON_PRIMARY, .x = 0.5F, .y = 0.5F, .pressureOrDistance = 0.8F};
+    config::input.native_pen_touch = false;
+    platf::touch_update(&client, port, touch);
+    platf::pen_update(&client, port, pen);
+    EXPECT_EQ(devices.touch->submit_count(), 0U);
+    EXPECT_EQ(devices.pen->submit_count(), 0U);
+    config::input.native_pen_touch = true;
+    platf::touch_update(&client, port, touch);
+    platf::pen_update(&client, port, pen);
+    EXPECT_EQ(devices.active_contacts.size(), 1U);
+    EXPECT_NE(devices.pen_buttons, 0);
+    config::input.mouse = false;
+    platf::touch_update(&client, port, {.eventType = LI_TOUCH_EVENT_CANCEL_ALL});
+    platf::pen_update(&client, port, {.eventType = LI_TOUCH_EVENT_CANCEL_ALL});
+    EXPECT_TRUE(devices.active_contacts.empty());
+    EXPECT_EQ(devices.pen_buttons, 0);
+    EXPECT_EQ(devices.pen->last_submitted_tool().transition, lvh::PointerTransition::cancel);
+  }
+
+  TEST_F(VirtualHidInputTest, BackClickPolicyAppliesToBothPlayStationProfiles) {
+    platf::input_raw_t raw {"hermes-kms-1", fake_runtime()};
+    for (const auto *name : {"ds4", "ds5"}) {
+      config::input.gamepad = name;
+      ASSERT_EQ(platf::gamepad::alloc(&raw, {0, 0}, {}, feedback), 0);
+      config::input.ds4_back_as_touchpad_click = true;
+      platf::gamepad::update(&raw, 0, {.buttonFlags = platf::BACK});
+      EXPECT_TRUE(raw.gamepads[0]->adapter->state().buttons.test(lvh::GamepadButton::touchpad));
+      config::input.ds4_back_as_touchpad_click = false;
+      platf::gamepad::update(&raw, 0, {.buttonFlags = platf::BACK});
+      EXPECT_FALSE(raw.gamepads[0]->adapter->state().buttons.test(lvh::GamepadButton::touchpad));
+      platf::gamepad::free(&raw, 0);
+    }
+  }
+
+  TEST_F(VirtualHidInputTest, StreamResetReleasesMappedKeysFifthMouseButtonAndOnlyItsOwnDevices) {
+    auto platform = std::make_shared<platf::input_t>(new platf::input_raw_t("hermes-kms-1", fake_runtime()));
+    platf::input_raw_t other {"hermes-kms-12", fake_runtime()};
+    auto *raw = static_cast<platf::input_raw_t *>(platform->get());
+    auto client = std::make_unique<platf::client_input_raw_t>(*platform, fake_runtime());
+    auto *devices = client->virtualhid_devices.get();
+    auto stream = input::alloc_for_testing(mailbox, platform, std::move(client));
+    const auto drain = []() {
+      while (auto task = task_pool.pop()) {
+        (*task)->run();
+      }
+    };
+    auto cleanup = util::fail_guard([&]() {
+      if (stream) {
+        input::reset(stream);
+        drain();
+        stream.reset();
+      }
+      drain();
+    });
+    const auto send = [&](auto packet, std::uint32_t magic) {
+      packet.header.magic = util::endian::little(magic);
+      packet.header.size = util::endian::big(static_cast<std::uint32_t>(sizeof(packet) - sizeof(packet.header.size)));
+      const auto *bytes = reinterpret_cast<const std::uint8_t *>(&packet);
+      input::passthrough(stream, std::vector<std::uint8_t>(bytes, bytes + sizeof(packet)), crypto::PERM::_all_inputs);
+      drain();
+    };
+    config::input.keybindings[0x41] = 0x42;
+    NV_KEYBOARD_PACKET key {};
+    key.keyCode = util::endian::little<short>(0x41);
+    send(key, KEY_DOWN_EVENT_MAGIC);
+    EXPECT_EQ(raw->keyboard->last_submitted_event().key_code, 0x42);
+    NV_MOUSE_BUTTON_PACKET mouse {};
+    mouse.button = BUTTON_X2;
+    send(mouse, MOUSE_BUTTON_DOWN_EVENT_MAGIC_GEN5);
+    EXPECT_TRUE(raw->mouse->last_submitted_event().pressed);
+    send(SS_CONTROLLER_ARRIVAL_PACKET {}, SS_CONTROLLER_ARRIVAL_MAGIC);
+    const auto slot = std::ranges::find_if(raw->gamepads, [](const auto &gamepad) {
+      return bool(gamepad);
+    });
+    ASSERT_NE(slot, raw->gamepads.end());
+    const auto index = static_cast<int>(slot - raw->gamepads.begin());
+    platf::gamepad::update(raw, index, {.buttonFlags = platf::A, .lt = 255});
+    platf::gamepad::touch(raw, {{index, 0}, LI_TOUCH_EVENT_DOWN, 12, 0.3F, 0.4F, 0.8F});
+    platf::virtualhid::touch_update(*devices, {}, {.eventType = LI_TOUCH_EVENT_DOWN, .pointerId = 123});
+    platf::virtualhid::pen_update(*devices, {}, {.eventType = LI_TOUCH_EVENT_DOWN, .toolType = LI_TOOL_TYPE_PEN, .penButtons = LI_PEN_BUTTON_PRIMARY, .pressureOrDistance = 0.8F});
+    const auto keyboard_other = other.keyboard->submit_count();
+    const auto mouse_other = other.mouse->submit_count();
+    input::reset(stream);
+    drain();
+    EXPECT_EQ(raw->keyboard->last_submitted_event().key_code, 0x42);
+    EXPECT_FALSE(raw->keyboard->last_submitted_event().pressed);
+    EXPECT_EQ(raw->mouse->last_submitted_event().button, lvh::MouseButton::extra);
+    EXPECT_FALSE(raw->mouse->last_submitted_event().pressed);
+    EXPECT_FALSE((*slot)->adapter->state().buttons.test(lvh::GamepadButton::a));
+    EXPECT_FLOAT_EQ((*slot)->adapter->state().left_trigger, 0.0F);
+    EXPECT_FALSE((*slot)->adapter->state().touchpad_contacts[0].active);
+    EXPECT_TRUE(devices->active_contacts.empty());
+    EXPECT_EQ(devices->pen_buttons, 0);
+    EXPECT_EQ(devices->pen->last_submitted_tool().transition, lvh::PointerTransition::cancel);
+    EXPECT_EQ(other.keyboard->submit_count(), keyboard_other);
+    EXPECT_EQ(other.mouse->submit_count(), mouse_other);
+    stream.reset();
+    drain();
+    EXPECT_EQ(raw->runtime->active_device_count(), 2U);
   }
 
   TEST_F(VirtualHidInputTest, DualSenseIdentityIsDistinctAcrossRuntimesAndStableWhenRequested) {
@@ -190,7 +366,7 @@ namespace {
     platf::gamepad::free(&one, 0);
     ASSERT_EQ(platf::gamepad::alloc(&one, {0, 0}, {}, feedback), 0);
     EXPECT_EQ(first, one.gamepads[0]->adapter->gamepad()->metadata().stable_id);
-    config::input.ds5_virtualhid_randomize_mac = true;
+    config::input.virtualhid_randomize_mac = true;
     platf::gamepad::free(&one, 0);
     ASSERT_EQ(platf::gamepad::alloc(&one, {0, 0}, {}, feedback), 0);
     const auto randomized = one.gamepads[0]->adapter->gamepad()->metadata().stable_id;
@@ -198,6 +374,23 @@ namespace {
     platf::gamepad::free(&one, 0);
     ASSERT_EQ(platf::gamepad::alloc(&one, {0, 0}, {}, feedback), 0);
     EXPECT_NE(randomized, one.gamepads[0]->adapter->gamepad()->metadata().stable_id);
+  }
+
+  TEST_F(VirtualHidInputTest, DualShockIdentityIsScopedAndUsesTheSharedRandomizationPolicy) {
+    config::input.gamepad = "ds4";
+    platf::input_raw_t one {"hermes-kms-1", fake_runtime()};
+    platf::input_raw_t two {"hermes-kms-12", fake_runtime()};
+    ASSERT_EQ(platf::gamepad::alloc(&one, {0, 0}, {}, feedback), 0);
+    ASSERT_EQ(platf::gamepad::alloc(&two, {0, 0}, {}, feedback), 0);
+    const auto first = one.gamepads[0]->adapter->gamepad()->metadata().stable_id;
+    EXPECT_NE(first, two.gamepads[0]->adapter->gamepad()->metadata().stable_id);
+    platf::gamepad::free(&one, 0);
+    ASSERT_EQ(platf::gamepad::alloc(&one, {0, 0}, {}, feedback), 0);
+    EXPECT_EQ(first, one.gamepads[0]->adapter->gamepad()->metadata().stable_id);
+    config::input.virtualhid_randomize_mac = true;
+    platf::gamepad::free(&one, 0);
+    ASSERT_EQ(platf::gamepad::alloc(&one, {0, 0}, {}, feedback), 0);
+    EXPECT_NE(first, one.gamepads[0]->adapter->gamepad()->metadata().stable_id);
   }
 
   TEST_F(VirtualHidInputTest, ControllerTouchMotionAndBatterySurviveButtonUpdates) {
@@ -350,10 +543,14 @@ namespace {
 
   TEST_F(VirtualHidInputTest, LegacyMacSettingIsCanonicalizedForTheConfigurationUi) {
     const auto old = config::parse_config("ds5_inputtino_randomize_mac = disabled\n");
-    EXPECT_EQ(old.at("ds5_virtualhid_randomize_mac"), "disabled");
+    EXPECT_EQ(old.at("virtualhid_randomize_mac"), "disabled");
     EXPECT_FALSE(old.contains("ds5_inputtino_randomize_mac"));
-    const auto both = config::parse_config("ds5_inputtino_randomize_mac = disabled\nds5_virtualhid_randomize_mac = enabled\n");
-    EXPECT_EQ(both.at("ds5_virtualhid_randomize_mac"), "enabled");
+    const auto newer = config::parse_config("ds5_virtualhid_randomize_mac = disabled\n");
+    EXPECT_EQ(newer.at("virtualhid_randomize_mac"), "disabled");
+    const auto aliases = config::parse_config("ds5_inputtino_randomize_mac = enabled\nds5_virtualhid_randomize_mac = disabled\n");
+    EXPECT_EQ(aliases.at("virtualhid_randomize_mac"), "disabled");
+    const auto both = config::parse_config("ds5_inputtino_randomize_mac = disabled\nvirtualhid_randomize_mac = enabled\n");
+    EXPECT_EQ(both.at("virtualhid_randomize_mac"), "enabled");
   }
 
   std::vector<lvh::DeviceNode> session_nodes(platf::input_raw_t &input, platf::virtualhid::client_devices_t &client) {
@@ -443,6 +640,11 @@ namespace {
 
   TEST_P(VirtualHidKernelTest, PrivateSeatsRouteEventsAndTearDownIndependently) {
     config::input.gamepad = GetParam();
+    if (std::string_view {GetParam()} == "generic") {
+      auto initialization = input::init();
+      ASSERT_TRUE(initialization);
+      EXPECT_FALSE(input::probe_gamepads()) << "startup probing must receive the owning input handle";
+    }
     auto one = platf::input("hermes-kms-1");
     auto two = platf::input("hermes-kms-12");
     auto client_one = platf::allocate_client_input_context(one);
@@ -491,7 +693,7 @@ namespace {
       return node.kind == lvh::DeviceNodeKind::input_event;
     }))
       << "UHID controller event children must be discovered even when the driver clears input/phys";
-    if (std::string_view {GetParam()} != "xone") {
+    if (std::string_view {GetParam()} == "ds4" || std::string_view {GetParam()} == "ds5" || std::string_view {GetParam()} == "switch") {
       EXPECT_TRUE(std::ranges::any_of(gamepad_nodes, [](const auto &node) {
         return node.kind == lvh::DeviceNodeKind::hidraw;
       }));
@@ -609,6 +811,6 @@ namespace {
     EXPECT_TRUE(has(readers_two.drain(), EV_KEY, KEY_B, 1));
   }
 
-  INSTANTIATE_TEST_SUITE_P(ControllerProfiles, VirtualHidKernelTest, testing::Values("xone", "ds5", "switch"));
+  INSTANTIATE_TEST_SUITE_P(ControllerProfiles, VirtualHidKernelTest, testing::Values("generic", "x360", "xone", "xseries", "ds4", "ds5", "switch"));
 }  // namespace
 #endif
