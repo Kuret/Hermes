@@ -123,8 +123,9 @@ namespace platf::dmabuf {
    *
    * Whether sampling a cached image sees what the producer wrote since the
    * import is a driver property, not something this class can establish:
-   * Hermes-KMS's tools/hermes-import-cache-check compares cached and fresh
-   * imports of the same live buffers to measure it on a given driver.
+   * Hermes-KMS's tools/hermes-import-cache-check measures it on a given
+   * driver, with a second process rendering known patterns into the buffers
+   * while kept and fresh imports are checked pixel by pixel.
    *
    * Destroying an Image must be valid wherever find(), insert() or clear()
    * run; for EGL that means on the thread with the context current.

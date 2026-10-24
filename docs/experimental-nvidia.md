@@ -97,9 +97,17 @@ The cache holds four buffers by default. `HERMES_CUDA_EGL_IMPORT_CACHE=N`
 (0..16) changes that, and `0` restores per-frame imports for A/B tests. The
 destructor logs hits, imports and evictions at debug level. Whether a cached
 image observes what the compositor rendered after the import is a driver
-property: run Hermes-KMS's `hermes-import-cache-check` on the target driver,
-which compares cached and fresh imports of the same live buffers, and keep
-`HERMES_CUDA_EGL_IMPORT_CACHE=0` if it reports stale content.
+property: run Hermes-KMS's
+[`hermes-import-cache-check`](https://github.com/MrOz59/Hermes-KMS/blob/experimental/nvidia-zero-copy/tools/hermes-import-cache-check/README.md)
+`--gpu /dev/dri/renderDN` on the target driver and keep
+`HERMES_CUDA_EGL_IMPORT_CACHE=0` if it reports stale content. It needs no
+Hermes-KMS card or compositor: a forked producer renders a known pattern with
+a new seed into its own DMA-BUFs, and the consumer checks every pixel of the
+imports it keeps, and of fresh imports, after every render. Its `--churn N`
+replays the old per-frame pattern so the VRAM retention can be watched with
+`nvidia-smi`. (A reported, unconfirmed explanation of that retention is a
+private copy made on first sample, which is exactly what would make kept
+images stale; hence the check.)
 
 ### Render node for the importer
 
@@ -162,14 +170,22 @@ Suggested order on an NVIDIA host:
 3. Load Hermes-KMS with the suggested `scanout_modifiers=`, start KWin, and
    confirm `hermes-egl-import-check` reports an NVIDIA modifier for the live
    desktop.
-4. `hermes-import-cache-check` on the live desktop with something animating.
+4. `hermes-import-cache-check --gpu /dev/dri/renderDN`, then with
+   `--modifiers linear` (no compositor or Hermes-KMS card needed).
 5. Stream with `HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto`, then compare
    against `HERMES_CUDA_EGL_IMPORT_CACHE=0` and the CPU copy.
 
-Remaining runtime steps: selected-device propagation (CUDA device and
-importer from the configured adapter instead of device 0), a Hermes-KMS flag
-for PRIME-imported framebuffers so linear GPU-origin scanouts can be routed
-too, and direct YUV output once the GPU-origin path passes on the real host.
+Multiple NVIDIA GPUs: the importer, FFmpeg's CUDA hwcontext and the
+page-locked frames all use CUDA device 0, so select the GPU for all of them at
+once with `CUDA_VISIBLE_DEVICES=<index from nvidia-smi -L>`. When
+`adapter_name` names an NVIDIA GPU that is not CUDA device 0, Hermes now warns
+with that remedy at importer start-up instead of capturing for one GPU and
+encoding on another.
+
+Remaining runtime steps: propagating `adapter_name` to the CUDA device itself,
+a Hermes-KMS flag for PRIME-imported framebuffers so linear GPU-origin
+scanouts can be routed too, and direct YUV output once the GPU-origin path
+passes on the real host.
 
 ## References
 
