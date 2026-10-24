@@ -2862,8 +2862,11 @@ namespace platf {
             warned_gpu_tiled = true;
             BOOST_LOG(error) << "Hermes-KMS CPU capture: the scanout is an NVIDIA tiled GPU buffer (modifier 0x"sv
                              << util::hex(frame.modifier).to_string_view()
-                             << ") that the CPU copy cannot read. Set HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto "
-                                "to import such frames on the GPU, or remove NVIDIA modifiers from the Hermes-KMS "
+                             << ") that the CPU copy cannot read. "sv
+                             << (nvenc_route.forced_cpu_copy ?
+                                   "Unset HERMES_KMS_FORCE_CPU_COPY and set HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto "sv :
+                                   "Set HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto "sv)
+                             << "to import such frames on the GPU, or remove NVIDIA modifiers from the Hermes-KMS "
                                 "scanout_modifiers= parameter so the compositor scans out linear buffers."sv;
           }
           frame.close();
