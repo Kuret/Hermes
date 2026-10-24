@@ -139,6 +139,8 @@ namespace platf {
     // for each client.
     inputtino::Result<inputtino::TouchScreen> touch;
     inputtino::Result<inputtino::PenTablet> pen;
+    // A button-only event must not lift a pen currently touching the screen.
+    bool pen_touching = false;
 #endif
   };
 
