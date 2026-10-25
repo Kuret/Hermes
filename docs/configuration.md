@@ -1300,6 +1300,12 @@ editing the `conf` file in a text editor. Use the examples as reference.
             <code>evdi</code> (stable default), <code>hermes_kms</code> (zero-copy, experimental), or
             <code>none</code>.
             <br><br>
+            Several features exist only with <code>hermes_kms</code>: zero-copy capture on AMD/Intel,
+            HDR10 on a virtual display, <code>hermes_kms_multi_output</code>,
+            <code>hermes_kms_isolated_sessions</code>, streaming before login, and the driver's
+            capture counters in diagnostics. It needs Hermes-KMS v0.4.0 or newer; Hermes does not fall
+            back to EVDI when it is selected but unavailable.
+            <br><br>
             <code>none</code> is for a host that has no virtual-display device and does not want one,
             because the output it streams already exists - a headless compositor session is the usual
             case. It also stops Hermes reporting readiness problems for a driver that host never uses.
@@ -1575,9 +1581,9 @@ editing the `conf` file in a text editor. Use the examples as reference.
             @note{The <code>labwc</code> profile sets the mode the client asked
             for with <code>wlr-randr</code>, which is a separate package. It is
             best-effort: without it the session still starts, but keeps whatever
-            mode wlroots preferred, which on a Hermes-KMS card up to 0.5.0 is
-            the larger of the two modes the driver marks preferred rather than
-            the one that was asked for.}
+            mode wlroots preferred. Hermes-KMS 0.4.0 and later mark only the
+            requested mode preferred, so that is normally the right one; drivers
+            up to 0.3.2 marked two and the larger won.}
         </td>
     </tr>
     <tr>

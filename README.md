@@ -8,10 +8,13 @@ Hermes-KMS is a purpose-built DRM/KMS virtual display driver that streams the
 compositor's scanout straight into the hardware encoder as a DMA-BUF, with no
 CPU readback, so it avoids the GPU→RAM→GPU copy that EVDI does. (Measured on one
 machine, KWin at 720p: ~8 us/frame of capture cost on Hermes-KMS against
-~180 us/frame for EVDI's CPU copy, constant regardless of resolution.) EVDI is
-still the default virtual-display backend and remains fully supported;
-Hermes-KMS is opt-in, and it is the backend the newer features are built on —
-see [Virtual display behavior](#virtual-display-behavior).
+~180 us/frame for EVDI's CPU copy, constant regardless of resolution.)
+
+For now EVDI is the default virtual-display backend and Hermes-KMS is opt-in and
+labeled experimental; it is expected to become the default once it leaves that
+status. Many Hermes features — HDR10, multi-output, independent sessions,
+streaming before login — exist only on Hermes-KMS, so using them means opting in;
+see [What needs Hermes-KMS](#what-needs-hermes-kms).
 
 Hermes keeps protocol compatibility with Sunshine, Moonlight, Artemis, and
 Hestia. The normal GameStream/Sunshine flow remains the fallback path, while
@@ -128,7 +131,7 @@ driver:
 | Value | Backend |
 |:------|:--------|
 | `evdi` | **Default.** EVDI, the stable backend. |
-| `hermes_kms` | Hermes-KMS, zero-copy; labeled experimental in the Web UI. Required for multi-output and independent sessions, the path HDR10 capture is implemented on, and the only backend streaming before login has been tried with. |
+| `hermes_kms` | Hermes-KMS, zero-copy. Labeled experimental for now, and the only backend for the features listed below. |
 | `none` | No virtual-display device: stream an output the session already has, such as a headless compositor. `headless` is accepted as an older spelling. |
 
 On Hyprland the setting is bypassed in favor of the compositor's own headless
@@ -146,7 +149,24 @@ exclusively" setting), `extend`, `mirror`, or `exclusive`. Nightly builds add
 `detached`, which on KDE enables and positions only the virtual output and
 leaves the physical monitor configuration untouched.
 
-### Hermes-KMS (zero-copy, opt-in)
+### What needs Hermes-KMS
+
+These work only with `virtual_display_backend = hermes_kms`; on EVDI they are
+unavailable, or (for HDR) the session streams SDR:
+
+- **Zero-copy capture** on AMD and Intel, without the per-frame CPU copy EVDI
+  makes.
+- **HDR10** on a virtual display. EVDI does not support HDR.
+- **Multi-output** (`hermes_kms_multi_output`): a separate output and capture
+  pipeline per simultaneous client.
+- **Independent sessions** (`hermes_kms_isolated_sessions`).
+- **Streaming before login** (`hermes --prelogin`): Hermes-KMS is the only
+  backend it has been run with, and its readiness report flags any other.
+- **Capture-side diagnostics**: the driver's frame, wait and export counters in
+  `/api/hestia/v1/diagnostics`.
+- **KMS capture without `CAP_SYS_ADMIN`**, through the driver's render node.
+
+### Hermes-KMS (experimental, opt-in)
 
 Enable it with `virtual_display_backend = hermes_kms`. The compositor owns the
 virtual card and scans out the desktop; Hermes opens the Hermes-KMS render node
