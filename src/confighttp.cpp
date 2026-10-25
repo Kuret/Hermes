@@ -1549,7 +1549,10 @@ namespace confighttp {
       {"hestia_protocol", 1},
       {"min_client_protocol", 1},
       {"max_client_protocol", 1},
-      {"server_version", "0.1.0-hermes"},
+      // Same version the web UI and the log report (the VERSION file, plus
+      // the commit suffix on non-release branches), so clients show the
+      // Hermes version the user actually installed.
+      {"server_version", PROJECT_VERSION},
       {"compatibility", {
         {"gamestream", true},
         {"moonlight", true},
@@ -1775,7 +1778,10 @@ namespace confighttp {
       BOOST_LOG(debug) << "[HestiaAPI] session prepare requested: width=" << stream["requested_width"]
                        << " height=" << stream["requested_height"] << " fps=" << stream["requested_fps"]
                        << " virtual_display=" << virtual_display["enabled"]
-                       << " launch_mode=" << app["launch_mode"];
+                       << " launch_mode=" << app["launch_mode"]
+                       << " client_name=" << input["client"]["name"]
+                       << " client_version=" << input["client"]["version"]
+                       << " client_platform=" << input["client"]["platform"];
 
       const nlohmann::json output {
         {"ok", true},

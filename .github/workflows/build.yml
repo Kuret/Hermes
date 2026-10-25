@@ -2,7 +2,8 @@ name: Build Hermes
 
 on:
   push:
-    branches: [master, main]
+    # Build test packages for #71; release/nightly jobs remain gated below.
+    branches: [master, main, fix/issue-71-stream-reconnect]
     tags:
       - 'v*'
   pull_request:

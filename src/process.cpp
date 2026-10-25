@@ -834,6 +834,13 @@ namespace proc {
         if (runtime.audio_server) {
           env["PULSE_SERVER"] = runtime.audio_server->pulse_server();
           env["PIPEWIRE_REMOTE"] = runtime.audio_server->pipewire_remote();
+          env["PIPEWIRE_RUNTIME_DIR"] = runtime.runtime_dir;
+          env["PULSE_SINK"] = runtime.audio_sink;
+          if (runtime.mic_source.empty()) {
+            env.erase("PULSE_SOURCE");
+          } else {
+            env["PULSE_SOURCE"] = runtime.mic_source;
+          }
         } else if (const auto host_runtime = host_runtime_dir(); !host_runtime.empty()) {
           env["PULSE_SERVER"] = "unix:" + host_runtime + "/pulse/native";
           env["PIPEWIRE_REMOTE"] = host_runtime + "/pipewire-0";
@@ -1010,6 +1017,27 @@ namespace proc {
       return {};
     }
   }  // namespace
+
+  #ifdef SUNSHINE_TESTS
+  // Exercise the production registry/RPC lock ordering without a compositor,
+  // display card or account manager. The test owns this synthetic entry.
+  void seed_isolated_runtime_for_test(uint32_t id, const std::string &client_uuid) {
+    auto runtime = std::make_shared<isolated_runtime_t>();
+    runtime->launch_session_id = id;
+    runtime->client_uuid = client_uuid;
+    runtime->app.id = "123";
+    runtime->app.uuid = "runtime-test-app";
+    runtime->unit = "hermes-session-test.service";
+    runtime->env["HERMES_REGISTRY_TEST"] = "ready";
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    isolated_runtimes[id] = runtime;
+  }
+
+  void erase_isolated_runtime_for_test(uint32_t id) {
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    isolated_runtimes.erase(id);
+  }
+  #endif
 #endif
 
   void onVDisplayWatchdogFailed() {
@@ -1302,21 +1330,12 @@ namespace proc {
                            << " already has a launch in progress.";
         return 409;
       }
-      if (const auto existing = find_isolated_client_locked(launch_session->unique_id);
-          isolated_runtime_running(existing)) {
-        BOOST_LOG(warning) << "[IsolatedSession] Client " << launch_session->device_name
-                           << " already owns runtime " << existing->runtime_id;
-        return 409;
-      } else if (existing) {
-        stale_runtime = existing;
-        isolated_runtimes.erase(existing->launch_session_id);
-      }
+      stale_runtime = find_isolated_client_locked(launch_session->unique_id);
       isolated_launching_clients.emplace(
         launch_session->unique_id,
         launch_cancelled
       );
     }
-    stop_isolated_runtime(stale_runtime);
     auto release_launch_reservation = util::fail_guard([
       client_uuid = launch_session->unique_id,
       launch_cancelled
@@ -1328,6 +1347,24 @@ namespace proc {
         isolated_launching_clients.erase(it);
       }
     });
+    // The reservation prevents a second launch for this client while liveness
+    // is queried. A broker timeout must not hold every other client's registry
+    // lock while we wait for it.
+    if (isolated_runtime_running(stale_runtime)) {
+      BOOST_LOG(warning) << "[IsolatedSession] Client " << launch_session->device_name
+                         << " already owns runtime " << stale_runtime->runtime_id;
+      return 409;
+    }
+    if (stale_runtime) {
+      {
+        std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+        const auto it = isolated_runtimes.find(stale_runtime->launch_session_id);
+        if (it != isolated_runtimes.end() && it->second == stale_runtime) {
+          isolated_runtimes.erase(it);
+        }
+      }
+      stop_isolated_runtime(stale_runtime);
+    }
     auto launch_was_cancelled = [&]() {
       if (!launch_cancelled->load(std::memory_order_relaxed)) {
         return false;
@@ -1352,6 +1389,20 @@ namespace proc {
     runtime->assets_dir =
       (std::filesystem::path {isolated_runtime_root()} / runtime->runtime_id).string();
     runtime->runtime_dir = runtime->assets_dir;
+
+    auto cleanup = util::fail_guard([&]() {
+      stop_isolated_runtime(runtime);
+      if (launch_session->session_virtual_display_cleanup_pending) {
+        // stop_isolated_runtime() owns the actual display removal once the
+        // runtime has copied display_name/display_guid.
+        if (runtime->display_name.empty()) {
+          VDISPLAY::removeVirtualDisplay(launch_session->display_guid);
+        }
+        launch_session->session_virtual_display_cleanup_pending = false;
+        launch_session->session_scoped_virtual_display = false;
+        launch_session->display_name.clear();
+      }
+    });
 
     // With a broker present the session gets a uid of its own, and the single
     // runtime directory has to become two: the session's, which systemd made
@@ -1437,20 +1488,6 @@ namespace proc {
                          << " runs as its own user, which has an audio server Hermes cannot "
                             "reach; audio for this session is not isolated yet.";
     }
-
-    auto cleanup = util::fail_guard([&]() {
-      stop_isolated_runtime(runtime);
-      if (launch_session->session_virtual_display_cleanup_pending) {
-        // stop_isolated_runtime() owns the actual display removal once the
-        // runtime has copied display_name/display_guid.
-        if (runtime->display_name.empty()) {
-          VDISPLAY::removeVirtualDisplay(launch_session->display_guid);
-        }
-        launch_session->session_virtual_display_cleanup_pending = false;
-        launch_session->session_scoped_virtual_display = false;
-        launch_session->display_name.clear();
-      }
-    });
 
     // The account was ensured above, before the display exists, so a card the
     // broker creates here can be made for it: the session's compositor runs as
@@ -1667,6 +1704,16 @@ namespace proc {
       // auto turns it on for a steam command; the environment switch predates
       // the setting and still forces it on everywhere, for testing.
       bool steam_mode = platf::gamescope::steam_mode_for(app.gamescope_steam_mode, app.cmd);
+      try {
+        const auto arguments = boost::program_options::split_unix(app.gamescope_args);
+        if (const auto option = platf::gamescope::session_option_override(arguments)) {
+          BOOST_LOG(error) << "[IsolatedSession] gamescope-args cannot override the session's card, backend or mode: " << *option;
+          return 400;
+        }
+      } catch (const std::exception &error) {
+        BOOST_LOG(error) << "[IsolatedSession] Invalid gamescope-args: " << error.what();
+        return 400;
+      }
       if (const char *forced_steam_mode = std::getenv("HERMES_ISOLATED_GAMESCOPE_STEAM_MODE");
           forced_steam_mode && std::string_view {forced_steam_mode} == "1") {
         steam_mode = true;
@@ -2167,22 +2214,28 @@ namespace proc {
 
   int proc_t::running_for_client(const std::string &client_uuid) {
 #ifndef _WIN32
-    std::shared_ptr<isolated_runtime_t> stale;
-    int app_id = 0;
+    std::shared_ptr<isolated_runtime_t> runtime;
     {
       std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
-      const auto runtime = find_isolated_client_locked(client_uuid);
-      if (!runtime) {
+      runtime = find_isolated_client_locked(client_uuid);
+    }
+    if (!runtime) {
+      return 0;
+    }
+    const bool active = isolated_runtime_running(runtime);
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      const auto it = isolated_runtimes.find(runtime->launch_session_id);
+      if (it == isolated_runtimes.end() || it->second != runtime) {
         return 0;
       }
-      if (isolated_runtime_running(runtime)) {
+      if (active && !runtime->stopping.load()) {
         return util::from_view(runtime->app.id);
       }
-      stale = runtime;
-      isolated_runtimes.erase(runtime->launch_session_id);
+      isolated_runtimes.erase(it);
     }
-    stop_isolated_runtime(stale);
-    return app_id;
+    stop_isolated_runtime(runtime);
+    return 0;
 #else
     (void) client_uuid;
     return running();
@@ -2191,9 +2244,19 @@ namespace proc {
 
   std::string proc_t::running_app_uuid_for_client(const std::string &client_uuid) {
 #ifndef _WIN32
+    std::shared_ptr<isolated_runtime_t> runtime;
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      runtime = find_isolated_client_locked(client_uuid);
+    }
+    if (!isolated_runtime_running(runtime)) {
+      return {};
+    }
     std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
-    const auto runtime = find_isolated_client_locked(client_uuid);
-    return isolated_runtime_running(runtime) ? runtime->app.uuid : std::string {};
+    const auto it = isolated_runtimes.find(runtime->launch_session_id);
+    return it != isolated_runtimes.end() && it->second == runtime && !runtime->stopping.load() ?
+             runtime->app.uuid :
+             std::string {};
 #else
     (void) client_uuid;
     return get_running_app_uuid();

@@ -12,6 +12,7 @@
 #include <cctype>
 #include <format>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -144,6 +145,22 @@ namespace platf::gamescope {
 
   /// The optional flags an application session gets when its app sets none.
   constexpr std::string_view default_args {"--expose-wayland --force-windows-fullscreen"};
+
+  // Call with the same parsed argument tokens run_command() will receive.
+  // A per-app option must not redirect an isolated compositor to the host's
+  // KMS card/backend, or replace the negotiated mode and connector.
+  inline std::optional<std::string> session_option_override(std::span<const std::string> arguments) {
+    for (const auto &argument : arguments) {
+      const std::string_view option = std::string_view {argument}.substr(0, argument.find('='));
+      if (option == "--" || option == "--backend" || option == "--prefer-drm" || option == "--drm-device" || option == "--output-width" || option == "--output-height" || option == "--nested-width" || option == "--nested-height" || option == "--nested-refresh" || option == "--prefer-output") {
+        return argument;
+      }
+      if (argument.size() >= 2 && argument[0] == '-' && argument[1] != '-' && std::string_view {"WHwhrO"}.find(argument[1]) != std::string_view::npos) {
+        return argument;
+      }
+    }
+    return std::nullopt;
+  }
 
   struct launch_t {
     std::string binary {"gamescope"};  ///< The executable; an absolute path for Hermes' own build.

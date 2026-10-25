@@ -158,6 +158,21 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Experimental isolated Gamescope sessions now wait for the private audio
+  graph's actual sink/source defaults and live session manager before starting
+  applications, instead of treating a socket file as audio readiness. Session
+  clients explicitly select their private output/input rather than inheriting
+  desktop defaults. Partial startup is covered by cleanup before resources are
+  acquired, and stopped private audio children are reaped.
+- Isolated-session liveness queries and launch checks no longer hold the
+  global runtime registry while waiting for the account broker. Per-app
+  Gamescope flags cannot replace the session-owned KMS card, backend, mode
+  or connector.
+- Client microphone packets no longer stop at the first session sharing an IP
+  address when that session's key fails to decrypt. Routing validates Opus,
+  rejects ambiguous CBC matches and binds the source endpoint after a unique
+  match. Microphone receive observes shutdown without depending on traffic,
+  and its socket receives the same inheritance protection as video/audio.
 - Resuming an isolated session took the host's audio ([#57], found by d3adb5
   as well). The stream
   looked the session's sink up by its own launch id rather than the one the
@@ -172,6 +187,22 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   remapped keys, the fifth mouse button, controller input and active pen/touch
   state only on the owning context. Startup controller probing now passes
   the owning input handle rather than casting the backend payload.
+- Linux clipboard helpers (`wl-copy`, `wl-paste`, and `xclip`) now close all
+  inherited non-standard descriptors before execution. The [#71] reporter's
+  socket listing identified a background `wl-copy` retaining video, control,
+  and audio ports after Hermes disconnected, preventing the next connection.
+  Video/audio sockets also receive explicit inheritance protection, and a
+  failed clipboard writer can no longer terminate the host with SIGPIPE.
+- Stream startup now destroys partially initialized shared resources on failure,
+  releasing sockets before a retry. ENet control sockets are marked close-on-exec
+  on POSIX hosts so executed helpers cannot retain the port, and shutdown
+  explicitly releases the control host after its threads finish. Connection
+  failures report the OS error instead of assuming every failure is a port
+  conflict. This hardens the reconnect path investigated in [#71]; validation
+  against the reporter's setup is still pending.
+- The Hestia `capabilities` endpoint reports the real Hermes version in
+  `server_version` (the same one the web UI shows, e.g. `0.6.0`) instead of a
+  fixed `0.1.0-hermes`, so Hestia clients display the installed version.
 - Hermes opens Hermes-KMS control/capture render nodes with `O_RDONLY`. Updated
   Hermes-KMS udev policy grants the active or configured consumer read-only
   access, which still permits every private capture ioctl and exported fd but
@@ -1808,6 +1839,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   former upstream `dist` revision became unreachable.
 
 [#2]: https://github.com/MrOz59/Hermes/issues/2
+[#71]: https://github.com/MrOz59/Hermes/issues/71
 [#6]: https://github.com/MrOz59/Hermes/issues/6
 [#8]: https://github.com/MrOz59/Hermes/issues/8
 [#9]: https://github.com/MrOz59/Hermes/issues/9
@@ -1836,6 +1868,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#57]: https://github.com/MrOz59/Hermes/issues/57
 [#58]: https://github.com/MrOz59/Hermes/pull/58
 [#61]: https://github.com/MrOz59/Hermes/issues/61
+[Hermes-KMS #13]: https://github.com/MrOz59/Hermes-KMS/issues/13
 
 ## [0.4.0] - 2026-07-02
 

@@ -5,9 +5,9 @@
  * Every case here is a session that would otherwise only be checked on a
  * machine with the Hermes-KMS driver, a private seat and a patched Gamescope.
  */
-#include "../../tests_common.h"
-
+#include <gtest/gtest.h>
 #include <src/platform/linux/gamescope_session.h>
+#include <vector>
 
 namespace {
   using namespace platf::gamescope;
@@ -160,5 +160,25 @@ namespace {
     EXPECT_EQ(command.find("--prefer-drm"), command.find("--prefer-drm /dev/dri/card3"));
     EXPECT_LT(command.find("--prefer-drm /dev/dri/card3"), separator);
     EXPECT_EQ(command.substr(separator + 4), launch.command);
+  }
+
+  TEST(GamescopeSession, AppArgumentsCannotReplaceTheSessionScanoutOrNegotiatedMode) {
+    for (const auto *argument : {"--backend=wayland", "--prefer-drm", "--drm-device=/dev/dri/card0", "--prefer-output", "--output-width=1280", "--output-height", "--nested-width", "--nested-height", "--nested-refresh", "-W1280", "-H", "-w800", "-h", "-r144", "-OHDMI-A-1", "--"}) {
+      const std::vector<std::string> arguments {argument};
+      EXPECT_TRUE(session_option_override(arguments)) << argument;
+    }
+  }
+
+  TEST(GamescopeSession, AppArgumentsCanChooseRenderingAndSteamPresentation) {
+    const std::vector<std::string> arguments {
+      "--hdr-enabled",
+      "--prefer-vk-device",
+      "1002:73df",
+      "--xwayland-count",
+      "1",
+      "--expose-wayland",
+      "-e"
+    };
+    EXPECT_FALSE(session_option_override(arguments));
   }
 }  // namespace

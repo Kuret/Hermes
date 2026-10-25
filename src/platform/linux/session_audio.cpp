@@ -27,6 +27,7 @@
 #include <boost/process/v1/handles.hpp>
 #include <boost/process/v1/io.hpp>
 #include <boost/process/v1/search_path.hpp>
+#include <pulse/pulseaudio.h>
 
 // local includes
 #include "session_audio.h"
@@ -139,16 +140,19 @@ wireplumber.profiles = {
     }
 
     void stop(bp::child &child) {
-      if (!child.valid() || !child.running()) {
+      if (!child.valid()) {
         return;
       }
-      ::kill(child.id(), SIGTERM);
+      if (child.running()) {
+        ::kill(child.id(), SIGTERM);
+      }
       for (int i = 0; i < 100 && child.running(); ++i) {
         std::this_thread::sleep_for(20ms);
       }
       if (child.running()) {
         child.terminate();
       }
+      child.wait();
     }
 
     class pipewire_t: public server_t {
@@ -180,6 +184,104 @@ wireplumber.profiles = {
       bp::child pipewire;
       bp::child wireplumber;
     };
+
+    // A socket on disk is not a ready audio graph. In particular WirePlumber
+    // can exit after exec, or the session's default node may not exist yet.
+    // Ask the explicitly named private server; never autospawn or probe the
+    // host's default server while bringing an isolated session up.
+    bool wait_for_audio_graph(pipewire_t &server, const std::string &sink, const std::string &mic) {
+      util::safe_ptr<pa_mainloop, pa_mainloop_free> loop {pa_mainloop_new()};
+      if (!loop) {
+        return false;
+      }
+      util::safe_ptr<pa_context, pa_context_unref> context {
+        pa_context_new(pa_mainloop_get_api(loop.get()), "Hermes session readiness")
+      };
+      if (!context || pa_context_connect(context.get(), server.pulse_server().c_str(), PA_CONTEXT_NOAUTOSPAWN, nullptr) < 0) {
+        return false;
+      }
+      auto disconnect = util::fail_guard([&]() {
+        pa_context_disconnect(context.get());
+      });
+      const auto deadline = std::chrono::steady_clock::now() + 5s;
+      while (std::chrono::steady_clock::now() < deadline) {
+        if (!server.pipewire.running() || !server.wireplumber.running() || !PA_CONTEXT_IS_GOOD(pa_context_get_state(context.get()))) {
+          return false;
+        }
+        if (pa_mainloop_iterate(loop.get(), 0, nullptr) < 0) {
+          return false;
+        }
+        if (pa_context_get_state(context.get()) != PA_CONTEXT_READY) {
+          std::this_thread::sleep_for(10ms);
+          continue;
+        }
+
+        struct graph_t {
+          const std::string &sink;
+          const std::string &mic;
+          bool output = false;
+          bool input = false;
+          bool defaults = false;
+        } graph {sink, mic, false, mic.empty(), false};
+
+        util::safe_ptr<pa_operation, pa_operation_unref> output {
+          pa_context_get_sink_info_by_name(context.get(), sink.c_str(), [](pa_context *, const pa_sink_info *info, int, void *data) {
+            auto &graph = *static_cast<graph_t *>(data);
+            if (info && info->name) {
+              graph.output = graph.sink == info->name;
+            }
+          },
+                                           &graph)
+        };
+        util::safe_ptr<pa_operation, pa_operation_unref> input;
+        if (!mic.empty()) {
+          input.reset(pa_context_get_source_info_by_name(context.get(), mic.c_str(), [](pa_context *, const pa_source_info *info, int, void *data) {
+            auto &graph = *static_cast<graph_t *>(data);
+            if (info && info->name) {
+              graph.input = graph.mic == info->name;
+            }
+          },
+                                                         &graph));
+        }
+        util::safe_ptr<pa_operation, pa_operation_unref> defaults {
+          pa_context_get_server_info(context.get(), [](pa_context *, const pa_server_info *info, void *data) {
+            auto &graph = *static_cast<graph_t *>(data);
+            graph.defaults = info && info->default_sink_name && graph.sink == info->default_sink_name &&
+                             (graph.mic.empty() || (info->default_source_name && graph.mic == info->default_source_name));
+          },
+                                     &graph)
+        };
+        auto cancel_operations = util::fail_guard([&]() {
+          for (auto *operation : {output.get(), input.get(), defaults.get()}) {
+            if (operation) {
+              pa_operation_cancel(operation);
+            }
+          }
+        });
+        if (!output || !defaults || (!mic.empty() && !input)) {
+          return false;
+        }
+        const auto pending = [&]() {
+          return pa_operation_get_state(output.get()) == PA_OPERATION_RUNNING ||
+                 pa_operation_get_state(defaults.get()) == PA_OPERATION_RUNNING ||
+                 (input && pa_operation_get_state(input.get()) == PA_OPERATION_RUNNING);
+        };
+        while (pending() && std::chrono::steady_clock::now() < deadline) {
+          if (!server.pipewire.running() || !server.wireplumber.running() || !PA_CONTEXT_IS_GOOD(pa_context_get_state(context.get())) || pa_mainloop_iterate(loop.get(), 0, nullptr) < 0) {
+            return false;
+          }
+          std::this_thread::sleep_for(10ms);
+        }
+        if (pending()) {
+          return false;
+        }
+        if (graph.output && graph.input && graph.defaults) {
+          return true;
+        }
+        std::this_thread::sleep_for(20ms);
+      }
+      return false;
+    }
   }  // namespace
 
   std::string session_mic_fifo(const std::string &mic) {
@@ -211,7 +313,7 @@ wireplumber.profiles = {
 
     // The user's own PipeWire config and WirePlumber state stay out of it.
     auto env = bp::environment {boost::this_process::environment()};
-    for (const auto *name : {"PIPEWIRE_REMOTE", "PIPEWIRE_RUNTIME_DIR", "PIPEWIRE_CONFIG_DIR", "PULSE_SERVER", "PULSE_RUNTIME_PATH", "WIREPLUMBER_CONFIG_DIR", "DBUS_SESSION_BUS_ADDRESS", "DISPLAY", "WAYLAND_DISPLAY"}) {
+    for (const auto *name : {"PIPEWIRE_REMOTE", "PIPEWIRE_RUNTIME_DIR", "PIPEWIRE_CONFIG_DIR", "PIPEWIRE_CONFIG_NAME", "PIPEWIRE_CORE", "PIPEWIRE_NODE", "PIPEWIRE_PROPS", "PULSE_SERVER", "PULSE_RUNTIME_PATH", "PULSE_SINK", "PULSE_SOURCE", "WIREPLUMBER_CONFIG_DIR", "DBUS_SESSION_BUS_ADDRESS", "DISPLAY", "WAYLAND_DISPLAY"}) {
       env.erase(name);
     }
     env["XDG_RUNTIME_DIR"] = runtime_dir;
@@ -238,6 +340,11 @@ wireplumber.profiles = {
     server->wireplumber = bp::child(wireplumber, "-p", "hermes-session", env, bp::std_in < bp::null, bp::limit_handles, ec);
     if (ec) {
       BOOST_LOG(warning) << "Couldn't start WirePlumber: "sv << ec.message();
+      return nullptr;
+    }
+    if (!wait_for_audio_graph(*server, sink, mic)) {
+      BOOST_LOG(warning) << "The private audio graph was not ready in "sv << runtime_dir
+                         << "; expected sink [" << sink << "] and source [" << mic << ']';
       return nullptr;
     }
 

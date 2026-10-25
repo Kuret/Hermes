@@ -1387,6 +1387,12 @@ alias; new configurations should use the key above.
             <code>evdi</code> (stable default), <code>hermes_kms</code> (zero-copy, experimental), or
             <code>none</code>.
             <br><br>
+            Several features exist only with <code>hermes_kms</code>: zero-copy capture on AMD/Intel,
+            HDR10 on a virtual display, <code>hermes_kms_multi_output</code>,
+            <code>hermes_kms_isolated_sessions</code>, streaming before login, and the driver's
+            capture counters in diagnostics. It needs Hermes-KMS v0.4.0 or newer; Hermes does not fall
+            back to EVDI when it is selected but unavailable.
+            <br><br>
             <code>none</code> is for a host that has no virtual-display device and does not want one,
             because the output it streams already exists - a headless compositor session is the usual
             case. It also stops Hermes reporting readiness problems for a driver that host never uses.
@@ -1550,11 +1556,18 @@ alias; new configurations should use the key above.
             virtual_display_backend = hermes_kms
             hermes_kms_isolated_sessions = true
             @endcode
-            Load the driver with:
+            Install the driver's broker (<code>hermes-kms-seatd-git</code>, or
+            <code>sudo make INSTALL_BROKER=1 dkms-install</code> from a clone)
+            and configure the session pool as the user Hermes runs as:
             @code{}
-            initial_enabled=0 devices=2 outputs=1
-            sudo systemctl enable --now hermes-kms-seatd@1.service hermes-kms-seatd@2.service
+            sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto
             @endcode
+            That configures one seat0 host card plus private session cards
+            (four by default, <code>--session-devices N</code> for up to eight)
+            and starts their brokers, asking for one reboot when a different
+            module topology is already loaded. Joining the <code>seat</code> group and
+            enabling <code>hermes-kms-seatd@N.service</code> by hand is no
+            longer needed; the helper removes that older enablement.
             A driver with UAPI 12 or newer can create cards at runtime instead,
             so the pool no longer has to be sized in advance. That is what the
             packaged card broker is for: with it enabled, an exhausted pool is
@@ -1658,9 +1671,9 @@ alias; new configurations should use the key above.
             @note{The <code>labwc</code> profile sets the mode the client asked
             for with <code>wlr-randr</code>, which is a separate package. It is
             best-effort: without it the session still starts, but keeps whatever
-            mode wlroots preferred, which on a Hermes-KMS card up to 0.5.0 is
-            the larger of the two modes the driver marks preferred rather than
-            the one that was asked for.}
+            mode wlroots preferred. Hermes-KMS 0.4.0 and later mark only the
+            requested mode preferred, so that is normally the right one; drivers
+            up to 0.3.2 marked two and the larger won.}
         </td>
     </tr>
     <tr>

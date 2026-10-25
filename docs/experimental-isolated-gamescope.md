@@ -73,6 +73,11 @@ layer.
   sink is its only device, and with `stream_mic` the client's microphone is
   its only source. Without PipeWire it falls back to a sink on the host's
   server. A resumed stream captures the session's sink.
+  Startup verifies the sink/source and their defaults through the private
+  PulseAudio endpoint after WirePlumber starts. Inherited desktop
+  `PULSE_SINK`/`PULSE_SOURCE` settings cannot redirect applications to a missing
+  or unrelated device. A failed private server is cleaned up before the
+  documented fallback is attempted.
 - **Devices.** `isolate-devices` gives it a private `/dev` (its own mount
   namespace) with only its client's devices; `isolate-sound` removes
   `/dev/snd`.
@@ -94,7 +99,29 @@ layer.
 Server environment: `HERMES_GAMESCOPE`, `HERMES_ISOLATED_GAMESCOPE_DRM_FLAG`,
 and `HERMES_ISOLATED_GAMESCOPE_STEAM_MODE=1` (Steam mode for every app).
 
+`gamescope-args` may choose rendering, HDR, scaling and Xwayland behavior, but
+cannot replace the DRM backend, scanout card, negotiated dimensions/refresh,
+connector or command separator. Those belong to the session rather than an
+application. Invalid overrides fail the launch with a diagnostic instead of
+starting a compositor against a different display.
+
 ## Validation needed
+
+The branch now runs the full Hermes/libvirtualhid compiler job and the focused
+network/clipboard regression suite on push. The compiler job also runs
+`GamescopeSession.*`, `ClientMicRouterTest.*`, and a GPU-free
+`SessionAudioLiveTest.*` integration pass. The audio pass starts real private
+PipeWire/WirePlumber instances, checks concurrent graphs against a simulated
+host graph, records silence through the production capture path twice, restarts
+a runtime, and rejects a session manager that exits during startup. It uses
+`HERMES_TEST_REQUIRE_PRIVATE_AUDIO=1`; missing dependencies are failures in that
+job, not silently skipped tests. These checks supplement the hardware scenarios
+below; they do not certify DRM scanout or real controller behavior.
+
+Microphone routing checks encrypted Opus against all eligible sessions sharing
+the peer address, drops ambiguous matches and then associates the endpoint
+with the selected stream. This preserves the legacy client microphone protocol;
+it does not add authentication to its existing CBC packet format.
 
 1. Desktop and session at once: physical input only on the desktop, client
    input only in the session; host controllers absent from the session with

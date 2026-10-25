@@ -408,10 +408,11 @@ The `desktop` profile is currently a reference Weston desktop, not a complete
 Plasma session. To use the shared host session, disable
 `hermes_kms_isolated_sessions`; mixing shared and isolated app profiles in one
 server is intentionally rejected by this prototype. These values have no
-effect while independent client sessions are disabled. Before launching, start
-one packaged `hermes-kms-seatd@N.service` for every configured Hermes-KMS
-device; Hermes assigns the corresponding private broker socket to the
-compositor automatically.
+effect while independent client sessions are disabled. Before launching,
+configure the driver's private-seat broker for the Hermes user with
+`sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto`, which starts
+one broker per session card; Hermes assigns the corresponding private broker
+socket to the compositor automatically.
 
 ```json
 {
