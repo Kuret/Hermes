@@ -25,6 +25,7 @@ namespace {
 
   launch_t session(drm_selector_e selector, bool steam_mode) {
     return {
+      .binary = "gamescope",
       .width = 1920,
       .height = 1080,
       .refresh_hz = 120,
@@ -129,6 +130,14 @@ namespace {
       "gamescope --backend=drm -W 1920 -H 1080 -w 1920 -h 1080 -r 120 --xwayland-count 1 "
       "--expose-wayland --force-windows-fullscreen -- steam -gamepadui"
     );
+  }
+
+  TEST(GamescopeSession, RunsTheGivenBinary) {
+    auto launch = session(drm_selector_e::prefer_drm, false);
+    launch.binary = "/usr/lib/hermes-gamescope/bin/gamescope";
+    EXPECT_TRUE(launch_command(launch).starts_with("/usr/lib/hermes-gamescope/bin/gamescope --backend=drm "));
+    launch.binary.clear();
+    EXPECT_TRUE(launch_command(launch).starts_with("gamescope --backend=drm "));
   }
 
   TEST(GamescopeSession, SteamModeAutoFollowsTheProgram) {

@@ -359,8 +359,11 @@ When `hermes_kms_isolated_sessions` is enabled, each application can select a
   session's where the session broker gave it a user of its own.
 
 An `application` session runs
-`gamescope --backend=drm --drm-device <card> -W -H -w -h -r <client mode> <steam mode> <flags> -O <connector> -- <cmd>`.
-Two fields tune it:
+`gamescope --backend=drm -W -H -w -h -r <client mode> <scanout option> <card> <steam mode> <flags> -O <connector> -- <cmd>`,
+where the scanout option is whichever of `--prefer-drm` or `--drm-device` the
+installed Gamescope lists in its `--help` (see
+[experimental-isolated-gamescope.md](experimental-isolated-gamescope.md)).
+Three fields tune it:
 
 - `gamescope-steam-mode`: `auto` (default) turns Steam mode on when the
   command's program is `steam`; `on`/`off` force it. Steam mode passes
@@ -372,6 +375,9 @@ Two fields tune it:
   `--expose-wayland --force-windows-fullscreen`; empty keeps it. These flags
   come after the Steam mode ones, so e.g. `--xwayland-count 1` overrides it.
   Like `cmd` here, the line is split on whitespace; quotes are not interpreted.
+- `first-frame-timeout` (seconds, `0` by default): how long the session has to
+  show its first frame before the launch fails. `0` means 30 seconds for the
+  `application` profile and 5 for `desktop`.
 
 Both profiles take two fields for what the session sees of the host's `/dev`
 (sessions running as the Hermes user; values `auto` (default), `on`, `off`):
@@ -407,25 +413,13 @@ one packaged `hermes-kms-seatd@N.service` for every configured Hermes-KMS
 device; Hermes assigns the corresponding private broker socket to the
 compositor automatically.
 
-Two more fields apply only to isolated sessions:
-
-- `gamescope-steam-mode` (`false` by default): for the `application` profile,
-  run Gamescope with `-e` and a second Xwayland server, which
-  `steam -gamepadui` and the Steam overlay need;
-- `first-frame-timeout` (seconds, `0` by default): how long the session has to
-  show its first frame before the launch fails. `0` means 30 seconds for the
-  `application` profile and 5 for `desktop`.
-
-The `application` profile needs a Gamescope that can scan out on a different
-device than it renders with; see
-[experimental-isolated-gamescope.md](experimental-isolated-gamescope.md).
-
 ```json
 {
   "name": "Steam Big Picture",
   "cmd": "steam -gamepadui",
   "session-type": "application",
-  "gamescope-steam-mode": true,
+  "gamescope-steam-mode": "auto",
+  "isolate-devices": "on",
   "first-frame-timeout": 45
 }
 ```

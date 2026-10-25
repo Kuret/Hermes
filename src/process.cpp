@@ -666,6 +666,49 @@ namespace proc {
     }
 
     /**
+     * @brief Where the Gamescope an application session runs lives.
+     *
+     * Hermes' own build (MrOz59/gamescope, branch hermes) installs into a
+     * prefix of its own instead of over the system's Gamescope, which a
+     * Steam Deck-style session or a desktop user may depend on. It is looked
+     * for there first; HERMES_GAMESCOPE names a binary outright; otherwise
+     * whichever gamescope PATH finds is used and the probe below decides
+     * whether it can do the job.
+     */
+    struct gamescope_install_t {
+      std::string binary;
+      std::string prefix;  ///< Empty for a Gamescope found on PATH.
+    };
+
+    gamescope_install_t find_gamescope() {
+      const auto prefix_of = [](const std::filesystem::path &binary) {
+        const auto dir = binary.parent_path();
+        return dir.filename() == "bin" ? dir.parent_path().string() : std::string {};
+      };
+      const auto usable = [](const std::string &path) {
+        return !path.empty() &&
+               std::ranges::none_of(path, [](unsigned char ch) { return std::isspace(ch) != 0; }) &&
+               ::access(path.c_str(), X_OK) == 0;
+      };
+
+      if (const char *forced = std::getenv("HERMES_GAMESCOPE"); forced && *forced) {
+        if (usable(forced)) {
+          return {forced, prefix_of(forced)};
+        }
+        BOOST_LOG(warning) << "[IsolatedSession] Ignoring HERMES_GAMESCOPE=" << forced
+                           << ": not an executable path without spaces.";
+      }
+      for (const auto *prefix : {"/usr/lib/hermes-gamescope", "/opt/hermes-gamescope"}) {
+        const auto binary = (std::filesystem::path {prefix} / "bin" / "gamescope").string();
+        if (usable(binary)) {
+          return {binary, prefix};
+        }
+      }
+      const auto found = boost::process::v1::search_path("gamescope").string();
+      return {usable(found) ? found : std::string {}, {}};
+    }
+
+    /**
      * @brief Start one command inside a session, wherever that session lives.
      *
      * Both halves used to be the same call, because everything ran as Hermes
@@ -1537,11 +1580,31 @@ namespace proc {
         BOOST_LOG(error) << "[IsolatedSession] Application profile requires a command.";
         return -1;
       }
-      const auto gamescope_binary = boost::process::v1::search_path("gamescope").string();
+      const auto gamescope = find_gamescope();
+      const auto &gamescope_binary = gamescope.binary;
       if (gamescope_binary.empty()) {
-        BOOST_LOG(error) << "[IsolatedSession] Application profile requires gamescope.";
+        BOOST_LOG(error) << "[IsolatedSession] Application profile requires gamescope; Hermes' own build "
+                            "installs to /usr/lib/hermes-gamescope (see scripts/install.sh).";
         return -1;
       }
+      if (!gamescope.prefix.empty()) {
+        // Gamescope starts its children through gamescopereaper, which it
+        // finds on PATH: the reaper has to be the one from the same build.
+        // Its WSI layer lives in the same prefix and is not registered with
+        // the system loader, so the session's Vulkan applications are pointed
+        // at it.
+        const auto bin_dir = (std::filesystem::path {gamescope.prefix} / "bin").string();
+        const auto path = runtime->env.count("PATH") ? runtime->env["PATH"].to_string() : std::string {};
+        runtime->env["PATH"] = path.empty() ? bin_dir : bin_dir + ":" + path;
+        const auto layer_dir = std::filesystem::path {gamescope.prefix} / "share" / "vulkan" / "implicit_layer.d";
+        if (std::error_code layer_ec; std::filesystem::is_directory(layer_dir, layer_ec)) {
+          const auto layers = runtime->env.count("VK_ADD_IMPLICIT_LAYER_PATH") ?
+                                runtime->env["VK_ADD_IMPLICIT_LAYER_PATH"].to_string() :
+                                std::string {};
+          runtime->env["VK_ADD_IMPLICIT_LAYER_PATH"] = layers.empty() ? layer_dir.string() : layer_dir.string() + ":" + layers;
+        }
+      }
+      BOOST_LOG(info) << "[IsolatedSession] Using " << gamescope_binary;
 
       // Gamescope scans out on this session's own Hermes-KMS card and renders
       // on the real GPU. Upstream cannot be told the two apart: it opens the
@@ -1580,8 +1643,9 @@ namespace proc {
       if (!selector) {
         BOOST_LOG(error) << "[IsolatedSession] " << gamescope_binary
                          << " cannot scan out on a different device than it renders with, so it "
-                            "would open the host GPU's display instead of this session's card. Use a "
-                            "Gamescope with --prefer-drm (ValveSoftware/gamescope#2220), or set "
+                            "would open the host GPU's display instead of this session's card. Install "
+                            "Hermes' Gamescope (scripts/install.sh), use one with --prefer-drm "
+                            "(ValveSoftware/gamescope#2220), or set "
                             "HERMES_ISOLATED_GAMESCOPE_DRM_FLAG for a build whose --help does not "
                             "list the option it accepts.";
         return 503;
@@ -1609,6 +1673,7 @@ namespace proc {
       }
 
       launch_command = platf::gamescope::launch_command({
+        .binary = gamescope_binary,
         .width = width,
         .height = height,
         .refresh_hz = refresh_hz,

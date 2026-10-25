@@ -146,6 +146,7 @@ namespace platf::gamescope {
   constexpr std::string_view default_args {"--expose-wayland --force-windows-fullscreen"};
 
   struct launch_t {
+    std::string binary {"gamescope"};  ///< The executable; an absolute path for Hermes' own build.
     int width = 1920;
     int height = 1080;
     int refresh_hz = 60;
@@ -162,8 +163,9 @@ namespace platf::gamescope {
    *
    * It is handed to run_command(), which splits on whitespace and never
    * involves a shell, so every value Hermes places here is a number, a
-   * generated connector name or a /dev/dri path; the app's own flags and
-   * command are split the same way and quotes are not interpreted.
+   * generated connector name, a /dev/dri path or a binary path checked to
+   * hold no whitespace; the app's own flags and command are split the same
+   * way and quotes are not interpreted.
    *
    * Steam mode is Gamescope's -e: without it every window's app id is its X
    * id, Steam's base-layer app id never matches, and the overlay stays
@@ -177,7 +179,8 @@ namespace platf::gamescope {
    */
   inline std::string launch_command(const launch_t &launch) {
     auto command = std::format(
-      "gamescope --backend=drm -W {} -H {} -w {} -h {} -r {}",
+      "{} --backend=drm -W {} -H {} -w {} -h {} -r {}",
+      launch.binary.empty() ? std::string {"gamescope"} : launch.binary,
       launch.width,
       launch.height,
       launch.width,
