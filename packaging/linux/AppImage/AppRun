@@ -61,7 +61,7 @@ function install() {
   sed -i -e "s#$SUNSHINE_PATH#$(readlink -f $ARGV0)#g" ~/.config/systemd/user/sunshine.service
 
   # setcap
-  sudo setcap cap_sys_admin+p "$(readlink -f "$SUNSHINE_BIN_HERE")"
+  sudo setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p "$(readlink -f "$SUNSHINE_BIN_HERE")"
 }
 
 function remove() {

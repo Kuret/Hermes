@@ -253,8 +253,8 @@ fi
 
 %files
 # Executables
-%caps(cap_sys_admin+p) %{_bindir}/sunshine
-%caps(cap_sys_admin+p) %{_bindir}/sunshine-*
+%caps(cap_sys_admin,cap_mknod,cap_sys_chroot+p) %{_bindir}/sunshine
+%caps(cap_sys_admin,cap_mknod,cap_sys_chroot+p) %{_bindir}/sunshine-*
 
 # Systemd unit file for user services
 %{_userunitdir}/sunshine.service

@@ -440,6 +440,18 @@
                  v-model="editForm['first-frame-timeout']" min="0" max="600" placeholder="0" />
           <div id="firstFrameTimeoutHelp" class="form-text">{{ $t('apps.session_first_frame_timeout_desc') }}</div>
         </div>
+        <!-- what isolated sessions see of the host's /dev -->
+        <template v-for="field in ['isolate-devices', 'isolate-sound']" :key="field">
+          <div class="mb-3" v-if="platform === 'linux'">
+            <label :for="field" class="form-label">{{ $t('apps.' + field.replace('-', '_')) }}</label>
+            <select :id="field" class="form-select" v-model="editForm[field]">
+              <option value="auto">{{ $t('apps.isolate_auto') }}</option>
+              <option value="on">{{ $t('apps.isolate_on') }}</option>
+              <option value="off">{{ $t('apps.isolate_off') }}</option>
+            </select>
+            <div class="form-text">{{ $t('apps.' + field.replace('-', '_') + '_desc') }}</div>
+          </div>
+        </template>
         <!-- use app identity -->
         <Checkbox class="mb-3"
                   id="useAppIdentity"
@@ -607,6 +619,8 @@
     "gamescope-steam-mode": "auto",
     "gamescope-args": "",
     "first-frame-timeout": 0,
+    "isolate-devices": "auto",
+    "isolate-sound": "auto",
     "terminate-on-pause": false,
     "gamepad": ""
   }

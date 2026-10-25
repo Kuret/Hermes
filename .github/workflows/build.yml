@@ -649,7 +649,7 @@ jobs:
           cat > ${PKGDIR}/DEBIAN/postinst << 'EOF'
           #!/bin/bash
           set -e
-          setcap cap_sys_admin+p /usr/bin/hermes || true
+          setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p /usr/bin/hermes || true
           if command -v modprobe &> /dev/null; then
             modprobe evdi 2>/dev/null || true
           fi
@@ -836,7 +836,7 @@ jobs:
           ${FILE_LIST}
 
           %post
-          setcap cap_sys_admin+p /usr/bin/hermes || true
+          setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p /usr/bin/hermes || true
           EOF
 
           rpmbuild -bb ~/rpmbuild/SPECS/hermes.spec

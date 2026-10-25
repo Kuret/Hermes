@@ -373,6 +373,21 @@ Two fields tune it:
   come after the Steam mode ones, so e.g. `--xwayland-count 1` overrides it.
   Like `cmd` here, the line is split on whitespace; quotes are not interpreted.
 
+Both profiles take two fields for what the session sees of the host's `/dev`
+(sessions running as the Hermes user; values `auto` (default), `on`, `off`):
+
+- `isolate-devices`: the session runs in its own mount namespace with a
+  private `/dev`: basic nodes, the GPUs (`/dev/dri`), `pts`, `shm`, `uinput`,
+  `fuse`, `ntsync`, and in `/dev/input` (and `hidraw`) only the session
+  client's devices and the Valve virtual pads Steam Input makes inside the
+  session, added as they appear. The host's controllers, keyboards, USB
+  devices and cameras are absent, and the client's devices are closed to the
+  desktop (the seat's ACL is not granted). Hermes needs
+  `cap_sys_admin,cap_mknod,cap_sys_chroot+p`; `auto` runs without isolation
+  (with a warning) when they are missing, `on` refuses to start.
+- `isolate-sound`: no `/dev/snd`, so applications only reach sound through
+  the session's own audio server.
+
 The `desktop` profile is currently a reference Weston desktop, not a complete
 Plasma session. To use the shared host session, disable
 `hermes_kms_isolated_sessions`; mixing shared and isolated app profiles in one

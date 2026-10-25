@@ -117,6 +117,11 @@ namespace proc {
     // Isolated application sessions only. Replaces the default optional
     // gamescope flags when not empty; Hermes still sets backend, card and mode.
     std::string gamescope_args;
+    // Isolated sessions only, auto/on/off. A private /dev without the host's
+    // input, USB, camera and sound devices; and no /dev/snd. auto: when Hermes
+    // can (capabilities), on: refuse to start without it.
+    std::string isolate_devices;
+    std::string isolate_sound;
     int  scale_factor;
     std::chrono::seconds exit_timeout;
   };

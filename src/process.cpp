@@ -79,6 +79,7 @@
 #else
   #include "platform/linux/session_audio.h"
   #include "platform/linux/session_broker.h"
+  #include "platform/linux/session_devices.h"
   #include "platform/linux/virtual_display.h"
   #include <sys/stat.h>
   #include <unistd.h>
@@ -132,6 +133,9 @@ namespace proc {
       std::string audio_sink;
       std::string mic_source;  ///< Empty where the client's microphone is not streamed.
       std::unique_ptr<platf::session_audio::server_t> audio_server;  ///< Where the session has its own.
+      pid_t namespace_pid {};  ///< Holds the session's mount namespace, where it has a private /dev.
+      std::unique_ptr<platf::session_devices::mirror_t> device_mirror;
+      std::string isolated_seat_flag;  ///< Tells the ACL rule to leave the seat's host nodes alone.
       std::chrono::steady_clock::time_point started_at {std::chrono::steady_clock::now()};
       std::string wayland_display;
       std::string drm_device_path;
@@ -179,6 +183,25 @@ namespace proc {
         std::filesystem::create_symlink(std::filesystem::path {host_runtime} / name,
                                         std::filesystem::path {runtime_dir} / name, ec);
       }
+    }
+
+    /**
+     * @brief The private /dev an app's session gets, or nullopt where an app
+     *        that demands it (`on`) cannot have it.
+     */
+    std::optional<platf::session_devices::options_t> session_device_options(const ctx_t &app) {
+      const platf::session_devices::options_t options {app.isolate_devices != "off", app.isolate_sound != "off"};
+      if ((!options.devices && !options.sound) || platf::session_devices::available()) {
+        return options;
+      }
+      if (app.isolate_devices == "on" || app.isolate_sound == "on") {
+        BOOST_LOG(error) << "[IsolatedSession] " << app.name << " requires device isolation, but Hermes lacks "
+                            "CAP_SYS_ADMIN and CAP_MKNOD (setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p).";
+        return std::nullopt;
+      }
+      BOOST_LOG(warning) << "[IsolatedSession] Hermes lacks CAP_SYS_ADMIN and CAP_MKNOD; "
+                         << app.name << " sees the host's devices.";
+      return platf::session_devices::options_t {};
     }
 
     std::string isolated_runtime_root() {
@@ -606,9 +629,9 @@ namespace proc {
       auto working_dir = app.working_dir.empty() ?
                            find_working_directory(command, runtime->env) :
                            boost::filesystem::path {app.working_dir};
-      auto child = platf::run_command(
-        app.elevated,
-        true,
+      const auto join = runtime->namespace_pid ? platf::session_devices::plan_t::join(runtime->namespace_pid) : nullptr;
+      auto child = platf::session_devices::run_command(
+        join.get(),
         command,
         working_dir,
         runtime->env,
@@ -839,6 +862,13 @@ namespace proc {
       }
       runtime->audio_sink.clear();
       runtime->mic_source.clear();
+      runtime->device_mirror.reset();
+      runtime->namespace_pid = 0;
+      if (!runtime->isolated_seat_flag.empty()) {
+        std::error_code flag_ec;
+        std::filesystem::remove(runtime->isolated_seat_flag, flag_ec);
+        runtime->isolated_seat_flag.clear();
+      }
 
       runtime->pipe.reset();
       if (!runtime->display_name.empty()) {
@@ -1225,23 +1255,6 @@ namespace proc {
       runtime->runtime_dir = "/run/user/" + std::to_string(runtime->account->uid);
     }
 
-    std::error_code dir_ec;
-    std::filesystem::create_directories(runtime->assets_dir, dir_ec);
-    // Traversable and readable when the session is somebody else, because that
-    // is the only way it can read the config written here; it holds nothing
-    // secret. Private otherwise, the way it always was.
-    const auto assets_mode = runtime->account ?
-                               static_cast<mode_t>(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) :
-                               static_cast<mode_t>(S_IRWXU);
-    if (dir_ec || ::chmod(runtime->assets_dir.c_str(), assets_mode) != 0) {
-      BOOST_LOG(error) << "[IsolatedSession] Could not create private runtime directory "
-                       << runtime->assets_dir << ": "
-                       << (dir_ec ? dir_ec.message() : std::strerror(errno));
-      return -1;
-    }
-    if (!runtime->account) {
-      link_host_discord_ipc(runtime->runtime_dir);
-    }
 
     // One sink per session, with the layout this client negotiated at launch.
     //
@@ -1668,9 +1681,26 @@ namespace proc {
                       << runtime->account->user << " (uid " << runtime->account->uid
                       << ") in " << runtime->unit << "; its log is in the journal.";
     } else {
-      runtime->process = platf::run_command(
-        app.elevated,
-        true,
+      const auto devices = session_device_options(app);
+      if (!devices) {
+        return 503;
+      }
+      std::unique_ptr<platf::session_devices::plan_t> plan;
+      if (devices->devices || devices->sound) {
+        const auto staging = std::filesystem::path {runtime->runtime_dir} / "dev";
+        std::error_code staging_ec;
+        std::filesystem::create_directories(staging, staging_ec);
+        plan = platf::session_devices::plan_t::isolate(staging.string(), *devices);
+      }
+      if (devices->devices) {
+        // Created before any of the seat's devices, which come with the stream.
+        runtime->isolated_seat_flag = (std::filesystem::path {host_runtime_dir()} / "hermes" / "isolated" / runtime->seat_id).string();
+        std::error_code flag_ec;
+        std::filesystem::create_directories(std::filesystem::path {runtime->isolated_seat_flag}.parent_path(), flag_ec);
+        std::ofstream {runtime->isolated_seat_flag};
+      }
+      runtime->process = platf::session_devices::run_command(
+        plan.get(),
         launch_command,
         working_dir,
         runtime->env,
@@ -1682,6 +1712,18 @@ namespace proc {
         BOOST_LOG(error) << "[IsolatedSession] Could not start compositor: "
                          << launch_ec.message();
         return -1;
+      }
+      if (plan) {
+        runtime->namespace_pid = runtime->process.id();
+        BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " has a private /dev: host devices "
+                        << (devices->devices ? "hidden" : "visible") << ", sound devices "
+                        << (devices->sound ? "hidden" : "visible") << '.';
+      }
+      if (devices->devices) {
+        runtime->device_mirror = platf::session_devices::mirror(runtime->namespace_pid, runtime->seat_id);
+        if (!runtime->device_mirror) {
+          return -1;
+        }
       }
     }
 
@@ -3709,20 +3751,24 @@ namespace proc {
                                << "' for app " << name << "; using auto.";
             ctx.virtual_display_layout = "auto";
           }
-          // A boolean is how an earlier build of this branch stored it.
-          if (const auto it = app_node.find("gamescope-steam-mode");
-              it != app_node.end() && it->is_boolean()) {
-            ctx.gamescope_steam_mode = it->get<bool>() ? "on" : "off";
-          } else {
-            ctx.gamescope_steam_mode = app_node.value("gamescope-steam-mode", "auto");
-          }
-          if (ctx.gamescope_steam_mode != "auto" &&
-              ctx.gamescope_steam_mode != "on" &&
-              ctx.gamescope_steam_mode != "off") {
-            BOOST_LOG(warning) << "Unknown gamescope-steam-mode '" << ctx.gamescope_steam_mode
-                               << "' for app " << name << "; using auto.";
-            ctx.gamescope_steam_mode = "auto";
-          }
+          auto mode = [&](const char *key) {
+            std::string value = "auto";
+            if (const auto it = app_node.find(key); it != app_node.end()) {
+              // A boolean is how an earlier build of this branch stored
+              // gamescope-steam-mode.
+              value = it->is_boolean() ? (it->get<bool>() ? "on" : "off") :
+                      it->is_string()  ? it->get<std::string>() :
+                                         std::string {"auto"};
+            }
+            if (value != "auto" && value != "on" && value != "off") {
+              BOOST_LOG(warning) << "Unknown " << key << " '" << value << "' for app " << name << "; using auto.";
+              value = "auto";
+            }
+            return value;
+          };
+          ctx.gamescope_steam_mode = mode("gamescope-steam-mode");
+          ctx.isolate_devices = mode("isolate-devices");
+          ctx.isolate_sound = mode("isolate-sound");
           ctx.gamescope_args = parse_env_val(this_env, app_node.value("gamescope-args", ""));
           ctx.gamepad = app_node.value("gamepad", "");
 
