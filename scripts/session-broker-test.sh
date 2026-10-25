@@ -66,7 +66,22 @@ fi
 
 PASS=0
 ok() { printf 'ok   %s\n' "$1"; PASS=$((PASS + 1)); }
-fail() { printf 'FAIL %s\n  %s\n' "$1" "${2:-}" >&2; exit 1; }
+fail() {
+	printf 'FAIL %s\n  %s\n' "$1" "${2:-}" >&2
+	if [ -n "$INPUT_TEST_ROOT" ]; then
+		for node in /sys/class/input/event* /sys/class/hidraw/hidraw*; do
+			[ -e "$node" ] || continue
+			properties="$(udevadm info --query=property --path="$node")"
+			if grep -q '^ID_SEAT=hermes-kms-' <<<"$properties"; then
+				printf '%s\n' "$node" "$properties"
+				device="$(sed -n 's/^DEVNAME=//p' <<<"$properties")"
+				[ -z "$device" ] || getfacl -cpn "$device"
+			fi
+		done
+		journalctl -u systemd-udevd --no-pager -n 200
+	fi
+	exit 1
+}
 
 ask() {
 	python3 - "$SOCKET" "$1" <<-'PY'
@@ -307,6 +322,7 @@ wait_input_access() {
 	fail 'the broker did not grant the two accounts their own input nodes' "$(journalctl -u hermes-session-broker --no-pager -n 30)"
 }
 
+udevadm control --log-level=debug
 start_sdl_probes
 start_input_probe
 start_hid_probe

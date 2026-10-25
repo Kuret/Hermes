@@ -9,6 +9,7 @@ int main(int argc, char **argv) {
     return 2;
   }
   SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "0");
+  SDL_LogSetPriority(SDL_LOG_CATEGORY_INPUT, SDL_LOG_PRIORITY_DEBUG);
   if (SDL_Init(SDL_INIT_JOYSTICK) != 0) {
     fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return 1;
@@ -24,6 +25,7 @@ int main(int argc, char **argv) {
   printf("ready\n");
   fflush(stdout);
   const Uint32 started = SDL_GetTicks();
+  SDL_JoystickID last_seen = -1;
   int result = 1;
   while (SDL_GetTicks() - started < 15000) {
     SDL_bool own_attached = SDL_FALSE;
@@ -32,6 +34,11 @@ int main(int argc, char **argv) {
       const char *name = SDL_JoystickNameForIndex(index);
       if (!name) {
         continue;
+      }
+      const SDL_JoystickID instance = SDL_JoystickGetDeviceInstanceID(index);
+      if (instance > last_seen) {
+        fprintf(stderr, "SDL discovered %s (%s)\n", name, SDL_JoystickPathForIndex(index));
+        last_seen = instance;
       }
       if (strcmp(name, argv[2]) == 0) {
         fprintf(stderr, "SDL enumerated the foreign seat controller\n");
@@ -57,6 +64,14 @@ int main(int argc, char **argv) {
     SDL_Delay(20);
   }
   fprintf(stderr, "SDL did not discover its readable hotplugged controller\n");
+  // Keep the failure, but distinguish a missed add event from classification
+  // or naming errors by recording what a fresh SDL scan sees afterwards.
+  SDL_Quit();
+  if (SDL_Init(SDL_INIT_JOYSTICK) == 0) {
+    for (int index = 0; index < SDL_NumJoysticks(); ++index) {
+      fprintf(stderr, "fresh scan: %s (%s)\n", SDL_JoystickNameForIndex(index), SDL_JoystickPathForIndex(index));
+    }
+  }
 done:
   SDL_Quit();
   return result;
