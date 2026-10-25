@@ -1101,7 +1101,15 @@ namespace rtsp_stream {
     // rather than whichever one the machine currently defaults to. Empty for
     // every session that shares the host's desktop, which leaves their capture
     // exactly as it was.
-    config.audio.session_sink = proc::proc.isolated_audio_sink(session.id);
+    //
+    // The runtime registry is keyed by the launch that started the session.
+    // A resumed stream arrives with a launch id of its own, so asking by
+    // session.id finds nothing, the sink comes back empty, and capture falls
+    // through to the host path - which moves the host's default sink onto the
+    // stream's virtual sink and takes the desktop's audio with it.
+    config.audio.session_sink = proc::proc.isolated_audio_sink(
+      session.isolated_runtime_owner_id ? session.isolated_runtime_owner_id : session.id
+    );
     try {
       config.audio.channels = util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
       config.audio.mask = util::from_view(args.at("x-nv-audio.surround.channelMask"sv));
