@@ -121,23 +121,24 @@ namespace {
     ASSERT_TRUE(second_sinks.is_array());
     ASSERT_EQ(first_sinks.size(), 1);
     ASSERT_EQ(second_sinks.size(), 1);
-    EXPECT_EQ(first_sinks[0]["name"], "sink-session-one");
-    EXPECT_EQ(second_sinks[0]["name"], "sink-session-two");
-    EXPECT_NE(second_sinks[0]["sample_spec"].get<std::string>().find("6ch"), std::string::npos);
+    EXPECT_EQ(first_sinks.at(0).at("name"), "sink-session-one");
+    EXPECT_EQ(second_sinks.at(0).at("name"), "sink-session-two");
+    ASSERT_TRUE(second_sinks.at(0).contains("sample_specification")) << second_sinks.dump();
+    EXPECT_NE(second_sinks.at(0).at("sample_specification").get<std::string>().find("6ch"), std::string::npos);
     const auto first_info = query(*first, "info");
-    EXPECT_EQ(first_info["default_sink_name"], "sink-session-one");
-    EXPECT_EQ(first_info["default_source_name"], "source-session-one");
+    EXPECT_EQ(first_info.at("default_sink_name"), "sink-session-one");
+    EXPECT_EQ(first_info.at("default_source_name"), "source-session-one");
     const auto sources = query(*first, "list", "sources");
     ASSERT_TRUE(sources.is_array());
     for (const auto &source : sources) {
-      const auto name = source["name"].get<std::string>();
+      const auto name = source.at("name").get<std::string>();
       EXPECT_TRUE(name == "source-session-one" || name == "sink-session-one.monitor") << name;
     }
     first.reset();
-    EXPECT_EQ(query(*second, "info")["default_sink_name"], "sink-session-two");
+    EXPECT_EQ(query(*second, "info").at("default_sink_name"), "sink-session-two");
     const auto after = query(*host, "info");
-    EXPECT_EQ(after["default_sink_name"], before["default_sink_name"]);
-    EXPECT_EQ(after["default_source_name"], before["default_source_name"]);
+    EXPECT_EQ(after.at("default_sink_name"), before.at("default_sink_name"));
+    EXPECT_EQ(after.at("default_source_name"), before.at("default_source_name"));
     EXPECT_EQ(query(*host, "list", "sinks").size(), 1);
   }
 
@@ -148,7 +149,7 @@ namespace {
     ASSERT_TRUE(server);
     record_silence(server, "sink-session-resume");
     ASSERT_TRUE(server);
-    EXPECT_EQ(query(*server, "info")["default_sink_name"], "sink-session-resume");
+    EXPECT_EQ(query(*server, "info").at("default_sink_name"), "sink-session-resume");
   }
 
   TEST_F(SessionAudioLiveTest, TeardownRemovesTheMicrophoneFifoAndAllowsRestart) {
@@ -162,7 +163,7 @@ namespace {
     EXPECT_FALSE(fs::exists(fifo));
     server = audio::start(path.string(), "sink-session-restart", 2, "source-session-restart");
     ASSERT_TRUE(server);
-    EXPECT_EQ(query(*server, "info")["default_source_name"], "source-session-restart");
+    EXPECT_EQ(query(*server, "info").at("default_source_name"), "source-session-restart");
   }
 
   TEST_F(SessionAudioLiveTest, ASessionManagerThatExitsDuringStartupIsRejected) {
