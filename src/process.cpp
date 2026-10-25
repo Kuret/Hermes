@@ -1030,7 +1030,7 @@ namespace proc {
     runtime->client_uuid = client_uuid;
     runtime->app.id = "123";
     runtime->app.uuid = "runtime-test-app";
-    runtime->unit = "hermes-session-test.service";
+    runtime->unit = "hermes-session-01.service";
     runtime->env["HERMES_REGISTRY_TEST"] = "ready";
     std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
     isolated_runtimes[id] = runtime;

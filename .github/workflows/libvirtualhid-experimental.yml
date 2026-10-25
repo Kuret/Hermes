@@ -209,6 +209,7 @@ jobs:
             -DBUILD_TESTS=ON
 
       - name: Compile Hermes and input tests
+        id: compile
         run: cmake --build build --target sunshine test_sunshine hermes-session-broker -j2
 
       - name: Test Hermes input translation and per-client feedback
@@ -218,6 +219,7 @@ jobs:
         run: ./test_sunshine --gtest_color=yes --gtest_filter='VirtualHidInputTest.*:SessionBrokerLockTest.*:SessionBrokerWorkersTest.*:SessionBrokerClientTest.*:SessionBrokerPolicyTest.*:SessionInputAccessTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*:GamescopeSession.*:ClientMicRouterTest.*:IsolatedRuntimeConcurrencyTest.*'
 
       - name: Test concurrent private audio servers and resumed capture
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
         timeout-minutes: 3
         env:
           HERMES_TEST_REQUIRE_PRIVATE_AUDIO: "1"

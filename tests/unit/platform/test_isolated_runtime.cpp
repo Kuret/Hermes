@@ -47,7 +47,7 @@ namespace {
       }
       setenv("HERMES_SESSION_BROKER_SOCKET", path.c_str(), 1);
       changed_environment = true;
-      proc::seed_isolated_runtime_for_test(id, "runtime-lock-test");
+      proc::seed_isolated_runtime_for_test(id, "abcd-1234");
       seeded = true;
     }
 
@@ -89,7 +89,7 @@ namespace {
         while (read(peer, buffer, sizeof(buffer)) > 0) {}
         accepted.set_value();
         release_future.wait();
-        constexpr char reply[] = "OK active hermes-session-test.service\n";
+        constexpr char reply[] = "OK active hermes-session-01.service\n";
         send(peer, reply, sizeof(reply) - 1, MSG_NOSIGNAL);
         close(peer);
       });
@@ -126,20 +126,20 @@ namespace {
 
   TEST_F(IsolatedRuntimeConcurrencyTest, AppIdLookupDoesNotBlockOtherSessionMetadata) {
     check([]() {
-      return proc::proc.running_for_client("runtime-lock-test") == 123;
+      return proc::proc.running_for_client("abcd-1234") == 123;
     });
   }
 
   TEST_F(IsolatedRuntimeConcurrencyTest, AppUuidLookupDoesNotBlockOtherSessionMetadata) {
     check([]() {
-      return proc::proc.running_app_uuid_for_client("runtime-lock-test") == "runtime-test-app";
+      return proc::proc.running_app_uuid_for_client("abcd-1234") == "runtime-test-app";
     });
   }
 
   TEST_F(IsolatedRuntimeConcurrencyTest, ResumeDoesNotBlockOtherSessionMetadata) {
     check([]() {
       auto session = std::make_shared<rtsp_stream::launch_session_t>();
-      session->unique_id = "runtime-lock-test";
+      session->unique_id = "abcd-1234";
       return proc::proc.prepare_isolated_resume(session) && session->isolated_runtime_owner_id == id;
     });
   }
@@ -147,7 +147,7 @@ namespace {
   TEST_F(IsolatedRuntimeConcurrencyTest, ResumeRejectsARuntimeRemovedWhileTheBrokerReplies) {
     check([]() {
       auto session = std::make_shared<rtsp_stream::launch_session_t>();
-      session->unique_id = "runtime-lock-test";
+      session->unique_id = "abcd-1234";
       return !proc::proc.prepare_isolated_resume(session) && !session->isolated_session;
     },
           true);

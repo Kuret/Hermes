@@ -119,6 +119,12 @@ a runtime, and rejects a session manager that exits during startup. It uses
 job, not silently skipped tests. These checks supplement the hardware scenarios
 below; they do not certify DRM scanout or real controller behavior.
 
+The independent `Private session audio` workflow compiles production
+`session_audio.cpp` and `audio.cpp` against the same integration tests without
+building the streaming host. It supplies only logging globals and the unused
+host-audio configuration object; private server startup and capture are the
+production implementations. This gives audio failures a shorter feedback loop.
+
 `IsolatedRuntimeConcurrencyTest.*` uses the real process registry with a delayed
 broker reply. It checks that app ID/UUID lookups and resume do not block other
 sessions' metadata, and that a runtime removed while the reply is pending cannot
