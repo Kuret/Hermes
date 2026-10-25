@@ -4,6 +4,31 @@
 #include <stdio.h>
 #include <string.h>
 
+static int controller_seat(int index, char *seat, size_t length) {
+  if (SDL_JoystickGetDeviceVendor(index) != 0xbeef || SDL_JoystickGetDeviceProduct(index) != 0xdead) {
+    return 0;
+  }
+  const char *path = SDL_JoystickPathForIndex(index);
+  const char *name = path ? strrchr(path, '/') : NULL;
+  char sysfs[256];
+  if (!name || strncmp(name + 1, "event", 5) != 0 || snprintf(sysfs, sizeof(sysfs), "/sys/class/input/%s/device/phys", name + 1) >= (int) sizeof(sysfs)) {
+    fprintf(stderr, "test controller has no evdev path\n");
+    return -1;
+  }
+  FILE *stream = fopen(sysfs, "r");
+  if (!stream) {
+    perror("open controller phys");
+    return -1;
+  }
+  const int read = fgets(seat, (int) length, stream) != NULL;
+  fclose(stream);
+  if (!read) {
+    return -1;
+  }
+  seat[strcspn(seat, "\n")] = '\0';
+  return 1;
+}
+
 int main(int argc, char **argv) {
   if (argc != 3) {
     return 2;
@@ -15,8 +40,8 @@ int main(int argc, char **argv) {
     return 1;
   }
   for (int index = 0; index < SDL_NumJoysticks(); ++index) {
-    const char *name = SDL_JoystickNameForIndex(index);
-    if (name && (strcmp(name, argv[1]) == 0 || strcmp(name, argv[2]) == 0)) {
+    char seat[128];
+    if (controller_seat(index, seat, sizeof(seat)) != 0) {
       fprintf(stderr, "test controllers must be created after SDL initialization\n");
       SDL_Quit();
       return 1;
@@ -32,7 +57,12 @@ int main(int argc, char **argv) {
     SDL_JoystickUpdate();
     for (int index = 0; index < SDL_NumJoysticks(); ++index) {
       const char *name = SDL_JoystickNameForIndex(index);
-      if (!name) {
+      char seat[128];
+      const int found = controller_seat(index, seat, sizeof(seat));
+      if (found < 0) {
+        goto done;
+      }
+      if (!found) {
         continue;
       }
       const SDL_JoystickID instance = SDL_JoystickGetDeviceInstanceID(index);
@@ -40,11 +70,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "SDL discovered %s (%s)\n", name, SDL_JoystickPathForIndex(index));
         last_seen = instance;
       }
-      if (strcmp(name, argv[2]) == 0) {
+      if (strcmp(seat, argv[2]) == 0) {
         fprintf(stderr, "SDL enumerated the foreign seat controller\n");
         goto done;
       }
-      if (strcmp(name, argv[1]) == 0) {
+      if (strcmp(seat, argv[1]) == 0) {
         SDL_Joystick *device = SDL_JoystickOpen(index);
         if (!device) {
           continue;

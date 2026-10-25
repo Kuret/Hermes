@@ -109,6 +109,7 @@ namespace hermes::session_broker::input_access {
 
     bool trusted_state(int fd) {
       struct stat info {};
+
       return ::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_uid == ::geteuid() &&
              info.st_nlink == 1 && (info.st_mode & 077) == 0 && info.st_size <= 65536;
     }
@@ -432,7 +433,9 @@ namespace hermes::session_broker::input_access {
       }
       return failure("open session input device");
     }
+
     struct stat info {};
+
     const auto current = inspect_node(paths, entry, owner.seat);
     if (::fstat(fd.value, &info) != 0 || !matches_descriptor(*candidate, info) || !current || current->device != candidate->device || current->sysfs != candidate->sysfs) {
       return {};

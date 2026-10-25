@@ -134,7 +134,9 @@ namespace {
     ASSERT_TRUE(access::read_leases(state));
     EXPECT_TRUE(access::read_leases(state)->empty());
     ASSERT_TRUE(access::write_leases(state, {owner}));
+
     struct stat info {};
+
     ASSERT_EQ(::stat(state.c_str(), &info), 0);
     EXPECT_EQ(info.st_mode & 0777U, 0600U);
     const auto reloaded = access::read_leases(state);
@@ -249,7 +251,9 @@ namespace {
     const auto entry = input_node("event0-foreign");
     EXPECT_FALSE(access::inspect_node(paths, entry, owner.seat));
     access::node candidate {.path = {}, .sysfs = {}, .device = ::makedev(13, 64)};
+
     struct stat info {};
+
     info.st_mode = S_IFREG | 0600;
     info.st_rdev = candidate.device;
     EXPECT_FALSE(access::matches_descriptor(candidate, info));

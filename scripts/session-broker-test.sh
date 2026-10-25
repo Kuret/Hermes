@@ -26,8 +26,10 @@ HID_PROBE_PID=""
 SDL_A_PID=""
 SDL_B_PID=""
 INPUT_TEST_ROOT=""
+BROKER_PAUSED_PID=""
 
 cleanup_input_probe() {
+	[ -z "$BROKER_PAUSED_PID" ] || kill -CONT "$BROKER_PAUSED_PID" 2>/dev/null || true
 	for pid in "$SDL_A_PID" "$SDL_B_PID"; do
 		[ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
 	done
@@ -240,10 +242,10 @@ cc -O2 -Wall -Wextra -Werror "$REPO/scripts/hermes-sdl-hotplug-probe.c" \
 
 start_sdl_probes() {
 	runuser -u hermes-s01 -- "$INPUT_TEST_ROOT/sdl-probe" \
-		'Hermes broker gamepad hermes-kms-1' 'Hermes broker gamepad hermes-kms-2' >"$INPUT_TEST_ROOT/sdl-a.log" 2>&1 &
+		hermes-kms-1 hermes-kms-2 >"$INPUT_TEST_ROOT/sdl-a.log" 2>&1 &
 	SDL_A_PID="$!"
 	runuser -u hermes-s02 -- "$INPUT_TEST_ROOT/sdl-probe" \
-		'Hermes broker gamepad hermes-kms-2' 'Hermes broker gamepad hermes-kms-1' >"$INPUT_TEST_ROOT/sdl-b.log" 2>&1 &
+		hermes-kms-2 hermes-kms-1 >"$INPUT_TEST_ROOT/sdl-b.log" 2>&1 &
 	SDL_B_PID="$!"
 	for _ in $(seq 100); do
 		if grep -qx ready "$INPUT_TEST_ROOT/sdl-a.log" && grep -qx ready "$INPUT_TEST_ROOT/sdl-b.log"; then return; fi
@@ -323,11 +325,20 @@ wait_input_access() {
 }
 
 udevadm control --log-level=debug
+# The asynchronous reconciliation loop cannot rescue these add events. The
+# production udev helper must grant access before already-running SDL sees them.
+BROKER_PAUSED_PID="$(systemctl show -p MainPID --value hermes-session-broker.service)"
+[ "$BROKER_PAUSED_PID" -gt 0 ] || fail 'the broker has no process to pause'
+flock --exclusive --timeout 5 /run/hermes/session-broker.lock.input kill -STOP "$BROKER_PAUSED_PID"
 start_sdl_probes
 start_input_probe
 start_hid_probe
+udevadm settle --timeout=10
 wait_input_access
 wait_sdl_probes
+kill -CONT "$BROKER_PAUSED_PID"
+BROKER_PAUSED_PID=""
+ok 'udev grants hotplug access while broker reconciliation is paused'
 ! can_open_input hermes-s01 "$NODE_B" || fail 'client A can open client B input'
 ! can_open_input hermes-s02 "$NODE_A" || fail 'client B can open client A input'
 ! can_open_input hermes-s01 "$HID_B" || fail 'client A can open client B hidraw'
