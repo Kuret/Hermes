@@ -208,6 +208,48 @@ TEST_P(HostCreateTest, MarksTheControlSocketCloseOnExec) {
 #endif
 
 #ifdef __linux__
+TEST_P(HostCreateTest, VideoAndAudioPortsAreReleasedWhileAnExecutedHelperLives) {
+  namespace ip = boost::asio::ip;
+  boost::asio::io_context io;
+  ip::udp::socket video(io);
+  ip::udp::socket audio(io);
+  const auto protocol = GetParam() == net::IPV4 ? ip::udp::v4() : ip::udp::v6();
+  std::array<ip::udp::socket *, 2> sockets {&video, &audio};
+  std::array<std::uint16_t, 2> ports {};
+  boost::system::error_code error;
+  for (std::size_t i = 0; i < sockets.size(); ++i) {
+    sockets[i]->open(protocol, error);
+    if (error) {
+      GTEST_SKIP() << "address family unavailable: " << error.message();
+    }
+    ASSERT_TRUE(net::prevent_socket_inheritance(sockets[i]->native_handle(), error)) << error.message();
+    sockets[i]->bind(ip::udp::endpoint(protocol, 0), error);
+    ASSERT_FALSE(static_cast<bool>(error)) << error.message();
+    ports[i] = sockets[i]->local_endpoint().port();
+    EXPECT_NE(fcntl(sockets[i]->native_handle(), F_GETFD) & FD_CLOEXEC, 0);
+  }
+
+  pid_t child;
+  char program[] = "/bin/sleep";
+  char duration[] = "30";
+  char *arguments[] = {program, duration, nullptr};
+  ASSERT_EQ(posix_spawn(&child, program, nullptr, nullptr, arguments, environ), 0);
+  auto cleanup = util::fail_guard([child]() {
+    kill(child, SIGTERM);
+    while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+  });
+
+  video.close();
+  audio.close();
+  for (auto port : ports) {
+    ip::udp::socket retry(io);
+    retry.open(protocol, error);
+    ASSERT_FALSE(static_cast<bool>(error)) << error.message();
+    retry.bind(ip::udp::endpoint(protocol, port), error);
+    EXPECT_FALSE(static_cast<bool>(error)) << "port " << port << ": " << error.message();
+  }
+}
+
 TEST_P(HostCreateTest, AnExecutedHelperDoesNotKeepTheControlPortAlive) {
   ENetAddress address {};
   auto host = net::host_create(GetParam(), address, 0);

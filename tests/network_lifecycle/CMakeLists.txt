@@ -17,6 +17,7 @@ add_executable(network_lifecycle_tests
   "${HERMES_ROOT}/src/network.cpp"
   "${HERMES_ROOT}/tests/unit/test_network.cpp"
   "${HERMES_ROOT}/tests/unit/test_thread_safe.cpp"
+  "${HERMES_ROOT}/tests/unit/test_clipboard_process.cpp"
   support.cpp
 )
 target_compile_features(network_lifecycle_tests PRIVATE cxx_std_23)

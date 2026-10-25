@@ -75,6 +75,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Linux clipboard helpers (`wl-copy`, `wl-paste`, and `xclip`) now close all
+  inherited non-standard descriptors before execution. The [#71] reporter's
+  socket listing identified a background `wl-copy` retaining video, control,
+  and audio ports after Hermes disconnected, preventing the next connection.
+  Video/audio sockets also receive explicit inheritance protection, and a
+  failed clipboard writer can no longer terminate the host with SIGPIPE.
 - Stream startup now destroys partially initialized shared resources on failure,
   releasing sockets before a retry. ENet control sockets are marked close-on-exec
   on POSIX hosts so executed helpers cannot retain the port, and shutdown

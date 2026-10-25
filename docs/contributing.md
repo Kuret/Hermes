@@ -172,7 +172,9 @@ Cases that need hardware the machine does not have skip themselves. The Wayland 
 A focused target compiles the production `src/network.cpp` and runs the socket
 and shared-resource tests without the capture/encoder dependencies or a display
 server. It covers failed startup cleanup, repeated reconnects, OS error reporting,
-and executed helpers retaining a control socket. It supplements the full suite;
+and executed helpers retaining control, video, or audio sockets. Linux clipboard
+tests also exercise the actual helper pipe code with deliberately inheritable
+sockets, full-size/empty content, failed commands, and broken pipes. The target supplements the full suite;
 it does not exercise RTSP negotiation, capture, or actual client sessions.
 
 On Ubuntu, install `cmake`, `ninja-build`, `libboost-log-dev`,

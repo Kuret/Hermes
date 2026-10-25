@@ -1859,6 +1859,9 @@ namespace stream {
     }
 
     ctx.video_sock.open(protocol, ec);
+    if (!ec) {
+      net::prevent_socket_inheritance(ctx.video_sock.native_handle(), ec);
+    }
     if (ec) {
       report_bind_failure("video", video_port, ec);
 
@@ -1880,6 +1883,9 @@ namespace stream {
     }
 
     ctx.audio_sock.open(protocol, ec);
+    if (!ec) {
+      net::prevent_socket_inheritance(ctx.audio_sock.native_handle(), ec);
+    }
     if (ec) {
       report_bind_failure("audio", audio_port, ec);
 

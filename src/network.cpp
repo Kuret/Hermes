@@ -232,22 +232,36 @@ namespace net {
       return host;
     }
 
-#ifndef _WIN32
     // The bundled ENet creates sockets without close-on-exec. A helper
     // launched during streaming must not keep our control port alive after
     // the last session releases its ENet host.
-    const int flags = fcntl(host->socket, F_GETFD);
-    if (flags == -1 || fcntl(host->socket, F_SETFD, flags | FD_CLOEXEC) == -1) {
-      const boost::system::error_code ec {errno, boost::system::system_category()};
+    boost::system::error_code ec;
+    if (!prevent_socket_inheritance(host->socket, ec)) {
       fail(ec);
       return host_t {};
     }
-#endif
 
     // Enable opportunistic QoS tagging (automatically disables if the network appears to drop tagged packets)
     enet_socket_set_option(host->socket, ENET_SOCKOPT_QOS, 1);
 
     return host;
+  }
+
+  bool prevent_socket_inheritance(boost::asio::ip::udp::socket::native_handle_type socket, boost::system::error_code &error) {
+    error.clear();
+#ifdef _WIN32
+    if (!SetHandleInformation(reinterpret_cast<HANDLE>(socket), HANDLE_FLAG_INHERIT, 0)) {
+      error = {static_cast<int>(GetLastError()), boost::system::system_category()};
+      return false;
+    }
+#else
+    const int flags = fcntl(socket, F_GETFD);
+    if (flags == -1 || fcntl(socket, F_SETFD, flags | FD_CLOEXEC) == -1) {
+      error = {errno, boost::system::system_category()};
+      return false;
+    }
+#endif
+    return true;
   }
 
   bool udp_port_available(af_e af, std::uint16_t port) {
