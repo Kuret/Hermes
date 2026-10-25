@@ -229,6 +229,9 @@ namespace proc {
      */
     std::string isolated_audio_sink(uint32_t launch_session_id);
 
+    /** The audio server an isolated session's sink lives in, or empty for the host's. */
+    std::string isolated_audio_server(uint32_t launch_session_id);
+
     /** Reattach launch metadata to a still-running client runtime. */
     bool prepare_isolated_resume(
       std::shared_ptr<rtsp_stream::launch_session_t> launch_session

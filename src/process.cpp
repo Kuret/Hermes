@@ -77,6 +77,7 @@
   // _SH constants for _wfsopen()
   #include <share.h>
 #else
+  #include "platform/linux/session_audio.h"
   #include "platform/linux/session_broker.h"
   #include "platform/linux/virtual_display.h"
   #include <sys/stat.h>
@@ -129,6 +130,7 @@ namespace proc {
       std::optional<platf::session_broker::account_t> account;
       std::string unit;
       std::string audio_sink;
+      std::unique_ptr<platf::session_audio::server_t> audio_server;  ///< Where the session has its own.
       std::chrono::steady_clock::time_point started_at {std::chrono::steady_clock::now()};
       std::string wayland_display;
       std::string drm_device_path;
@@ -684,14 +686,15 @@ namespace proc {
         erase_host_session_environment(env);
       } else {
         env["XDG_RUNTIME_DIR"] = runtime.runtime_dir;
-        // That is also how a PulseAudio or PipeWire client finds its server,
-        // and it has just been pointed at a directory with no server in it.
-        // Left alone, everything in the session fails to connect to audio at
-        // all - "Connection refused" - and the sink made for this session would
-        // never see a sample. Naming the host's sockets keeps the session on
-        // the audio server it was already using; what changed is only which
-        // sink it plays into.
-        if (const auto host_runtime = host_runtime_dir(); !host_runtime.empty()) {
+        // That is also how a PulseAudio or PipeWire client finds its server.
+        // The session's own lives there; named explicitly all the same, so
+        // nothing (an X11 root window property, client.conf) overrides it.
+        // Without one, the session would fail to connect to audio at all, so
+        // it is pointed at the host's server and plays into its session sink.
+        if (runtime.audio_server) {
+          env["PULSE_SERVER"] = runtime.audio_server->pulse_server();
+          env["PIPEWIRE_REMOTE"] = runtime.audio_server->pipewire_remote();
+        } else if (const auto host_runtime = host_runtime_dir(); !host_runtime.empty()) {
           env["PULSE_SERVER"] = "unix:" + host_runtime + "/pulse/native";
           env["PIPEWIRE_REMOTE"] = host_runtime + "/pipewire-0";
         }
@@ -702,7 +705,7 @@ namespace proc {
       // the session would play to whichever sink the machine currently defaults
       // to, which is the host's - audible on the host's speakers and captured
       // by whichever stream moved that default.
-      if (!runtime.audio_sink.empty()) {
+      if (!runtime.audio_sink.empty() && !runtime.audio_server) {
         env["PULSE_SINK"] = runtime.audio_sink;
       }
       env["XDG_SESSION_TYPE"] = "wayland";
@@ -828,10 +831,12 @@ namespace proc {
         }
       }
 
-      if (!runtime->audio_sink.empty()) {
+      if (runtime->audio_server) {
+        runtime->audio_server.reset();
+      } else if (!runtime->audio_sink.empty()) {
         audio::remove_session_sink(runtime->audio_sink);
-        runtime->audio_sink.clear();
       }
+      runtime->audio_sink.clear();
 
       runtime->pipe.reset();
       if (!runtime->display_name.empty()) {
@@ -1218,36 +1223,6 @@ namespace proc {
       runtime->runtime_dir = "/run/user/" + std::to_string(runtime->account->uid);
     }
 
-    // One sink per session, with the layout this client negotiated at launch.
-    //
-    // Only where the session shares the host's audio server. A session with a
-    // uid of its own gets a user manager, and with it an audio server of its
-    // own that nothing here can reach - /run/user/<uid> is 0700 and somebody
-    // else's. A sink created in the host's server would then be one the session
-    // never plays into, and capturing it would hand the client silence, which
-    // is worse than the host's audio it hears today.
-    //
-    // A failure is not fatal either way: the session falls back to what it did
-    // before any of this existed.
-    if (!runtime->account) {
-      const int audio_channels = launch_session->surround_info & 65535;
-      const std::string audio_sink = "sink-" + runtime->runtime_id;
-      if (audio::create_session_sink(audio_sink, audio_channels)) {
-        runtime->audio_sink = audio_sink;
-        BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " plays into "
-                        << audio_sink << " (" << audio_channels << " channels).";
-      } else {
-        BOOST_LOG(warning) << "[IsolatedSession] Could not create a private audio sink for "
-                           << runtime->runtime_id
-                           << "; this session will share the host's audio, and the client will "
-                              "hear whatever the host is playing.";
-      }
-    } else {
-      BOOST_LOG(warning) << "[IsolatedSession] Session " << runtime->runtime_id
-                         << " runs as its own user, which has an audio server Hermes cannot "
-                            "reach; audio for this session is not isolated yet.";
-    }
-
     std::error_code dir_ec;
     std::filesystem::create_directories(runtime->assets_dir, dir_ec);
     // Traversable and readable when the session is somebody else, because that
@@ -1264,6 +1239,41 @@ namespace proc {
     }
     if (!runtime->account) {
       link_host_discord_ipc(runtime->runtime_dir);
+    }
+
+    // One sink per session, with the layout this client negotiated at launch.
+    //
+    // Only where the session shares the host's audio server. A session with a
+    // uid of its own gets a user manager, and with it an audio server of its
+    // own that nothing here can reach - /run/user/<uid> is 0700 and somebody
+    // else's. A sink created in the host's server would then be one the session
+    // never plays into, and capturing it would hand the client silence, which
+    // is worse than the host's audio it hears today.
+    //
+    // A failure is not fatal either way: the session falls back to what it did
+    // before any of this existed.
+    if (!runtime->account) {
+      const int audio_channels = launch_session->surround_info & 65535;
+      const std::string audio_sink = "sink-" + runtime->runtime_id;
+      // Preferably in a PipeWire server of its own, which knows no host device
+      // and which the host's server never sees.
+      runtime->audio_server = platf::session_audio::start(runtime->runtime_dir, audio_sink, audio_channels);
+      if (runtime->audio_server) {
+        runtime->audio_sink = audio_sink;
+      } else if (audio::create_session_sink(audio_sink, audio_channels)) {
+        runtime->audio_sink = audio_sink;
+        BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " plays into "
+                        << audio_sink << " on the host's audio server (" << audio_channels << " channels).";
+      } else {
+        BOOST_LOG(warning) << "[IsolatedSession] Could not create a private audio sink for "
+                           << runtime->runtime_id
+                           << "; this session will share the host's audio, and the client will "
+                              "hear whatever the host is playing.";
+      }
+    } else {
+      BOOST_LOG(warning) << "[IsolatedSession] Session " << runtime->runtime_id
+                         << " runs as its own user, which has an audio server Hermes cannot "
+                            "reach; audio for this session is not isolated yet.";
     }
 
     auto cleanup = util::fail_guard([&]() {
@@ -2096,6 +2106,19 @@ namespace proc {
     // Empty for every session that is not isolated, and for one whose private
     // sink could not be made - both of which mean "capture the way you always
     // did".
+    return {};
+  }
+
+  std::string proc_t::isolated_audio_server(uint32_t launch_session_id) {
+#ifndef _WIN32
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    const auto it = isolated_runtimes.find(launch_session_id);
+    if (it != isolated_runtimes.end() && it->second && it->second->audio_server) {
+      return it->second->audio_server->pulse_server();
+    }
+#else
+    (void) launch_session_id;
+#endif
     return {};
   }
 

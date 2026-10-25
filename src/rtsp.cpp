@@ -1110,6 +1110,9 @@ namespace rtsp_stream {
     config.audio.session_sink = proc::proc.isolated_audio_sink(
       session.isolated_runtime_owner_id ? session.isolated_runtime_owner_id : session.id
     );
+    config.audio.session_server = proc::proc.isolated_audio_server(
+      session.isolated_runtime_owner_id ? session.isolated_runtime_owner_id : session.id
+    );
     try {
       config.audio.channels = util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
       config.audio.mask = util::from_view(args.at("x-nv-audio.surround.channelMask"sv));

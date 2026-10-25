@@ -75,6 +75,9 @@ namespace audio {
      * neither the default nor any other session's audio is involved.
      */
     std::string session_sink;
+
+    /// The audio server session_sink lives in, where the session has its own.
+    std::string session_server;
   };
 
   struct audio_ctx_t {

@@ -339,6 +339,8 @@ list(APPEND PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/linux/misc.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/misc.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/audio.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_audio.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_audio.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/prelogin.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/prelogin.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/session_attach.h"
