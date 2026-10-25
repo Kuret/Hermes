@@ -266,6 +266,19 @@ Big Picture inside Gamescope on top of the virtual display.
 
 ## Installing
 
+The quickest way is the installer, run as the user Hermes will stream for:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash
+```
+
+It installs the Hermes package for your distribution (Arch, CachyOS, Ubuntu
+24.04/26.04 or Fedora 43/44) and then asks, one at a time, about the
+[Hermes-KMS](#installing-the-hermes-kms-driver) driver, experimental isolated
+sessions (with Hermes' own Gamescope build) and streaming the login screen.
+Add `--nightly` for the rolling build of `main`, `--dry-run` to see the
+commands without running them. To install by hand instead:
+
 Every push to `main` refreshes the rolling **nightly** prerelease, and a tagged
 version publishes a normal release, both at
 <https://github.com/MrOz59/Hermes/releases>. CI builds these Linux packages:
