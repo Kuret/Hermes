@@ -7,6 +7,7 @@
 #include "crypto.h"
 #include "utility.h"
 
+#include <array>
 #include <cstring>
 #include <optional>
 #include <opus/opus.h>
@@ -51,6 +52,13 @@ namespace audio {
       }
       const int samples = opus_packet_get_nb_samples(plaintext.data(), static_cast<opus_int32>(plaintext.size()), 48000);
       if (samples <= 0 || samples > 5760) {
+        continue;
+      }
+      unsigned char toc;
+      std::array<const unsigned char *, 48> frames;
+      std::array<opus_int16, 48> sizes;
+      int payload_offset;
+      if (opus_packet_parse(plaintext.data(), static_cast<opus_int32>(plaintext.size()), &toc, frames.data(), sizes.data(), &payload_offset) <= 0) {
         continue;
       }
       if (result) {

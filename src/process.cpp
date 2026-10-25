@@ -1713,8 +1713,8 @@ namespace proc {
           BOOST_LOG(error) << "[IsolatedSession] gamescope-args cannot override the session's card, backend or mode: " << *option;
           return 400;
         }
-      } catch (const std::exception &error) {
-        BOOST_LOG(error) << "[IsolatedSession] Invalid gamescope-args: " << error.what();
+      } catch (const std::exception &exception) {
+        BOOST_LOG(error) << "[IsolatedSession] Invalid gamescope-args: " << exception.what();
         return 400;
       }
       if (const char *forced_steam_mode = std::getenv("HERMES_ISOLATED_GAMESCOPE_STEAM_MODE");

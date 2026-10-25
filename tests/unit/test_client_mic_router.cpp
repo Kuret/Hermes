@@ -73,6 +73,10 @@ namespace {
     EXPECT_FALSE(audio::route_mic_packet(sessions, sequence, "short packet"));
     EXPECT_FALSE(audio::route_mic_packet(sessions, sequence, std::string(4096, 'x')));
     EXPECT_FALSE(audio::route_mic_packet(sessions, sequence, encrypt(key, {})));
+    // The TOC reports two equal frames, but the payload cannot be split.
+    const std::vector<std::uint8_t> malformed_opus {0x01, 0x7f};
+    ASSERT_GT(opus_packet_get_nb_samples(malformed_opus.data(), malformed_opus.size(), 48000), 0);
+    EXPECT_FALSE(audio::route_mic_packet(sessions, sequence, encrypt(key, malformed_opus)));
   }
 
   TEST(ClientMicRouterTest, UsesTheCurrentStreamsKeyIdAfterReconnect) {
