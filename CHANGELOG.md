@@ -1738,6 +1738,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#52]: https://github.com/MrOz59/Hermes/issues/52
 [#58]: https://github.com/MrOz59/Hermes/pull/58
 [#61]: https://github.com/MrOz59/Hermes/issues/61
+[Hermes-KMS #13]: https://github.com/MrOz59/Hermes-KMS/issues/13
 
 ## [0.4.0] - 2026-07-02
 
