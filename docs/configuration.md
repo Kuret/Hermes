@@ -829,31 +829,6 @@ alias; new configurations should use the key above.
     </tr>
 </table>
 
-### isolated_ignore_mouse_wiggle
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Moonlight-based clients move the mouse by one pixel and back right after connecting to wake the host
-            display. In an isolated gamescope session that is real motion and shows the cursor until the app hides it.
-            When enabled, Hermes drops that +1,+1 / -1,-1 move if it is the first mouse input of an isolated session.
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            enabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            isolated_ignore_mouse_wiggle = disabled
-            @endcode</td>
-    </tr>
-</table>
-
 ### high_resolution_scrolling
 
 <table>
@@ -901,6 +876,31 @@ alias; new configurations should use the key above.
         <td>Example</td>
         <td colspan="2">@code{}
             native_pen_touch = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### isolated_ignore_mouse_wiggle
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Moonlight-based clients move the mouse by one pixel and back right after connecting to wake the host
+            display. In an isolated gamescope session that is real motion and shows the cursor until the app hides it.
+            When enabled, Hermes drops that +1,+1 / -1,-1 move if it is the first mouse input of an isolated session.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            isolated_ignore_mouse_wiggle = disabled
             @endcode</td>
     </tr>
 </table>
@@ -1108,6 +1108,33 @@ alias; new configurations should use the key above.
         <td>Example</td>
         <td colspan="2">@code{}
             stream_audio = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### stream_mic
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Offer clients microphone passthrough (Apollo's protocol; Moonlight forks such as Artemis
+            builds that support it). The microphone reaches an independent client session only, as
+            the only source of that session's private audio server; it never reaches the host's
+            desktop. Experimental.
+            @note{Applies to Linux independent client sessions (hermes_kms_isolated_sessions).}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            stream_mic = enabled
             @endcode</td>
     </tr>
 </table>

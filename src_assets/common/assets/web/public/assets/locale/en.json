@@ -554,6 +554,8 @@
         "server_cmd_desc": "Configure a list of commands to be executed when called from client during streaming.",
         "stream_audio": "Stream Audio",
         "stream_audio_desc": "Whether to stream audio or not. Disabling this can be useful for streaming headless displays as second monitors.",
+        "stream_mic": "Stream the client's microphone",
+        "stream_mic_desc": "Experimental. Offer clients microphone passthrough (Apollo's protocol). The microphone reaches independent client sessions only, as the only source of the session's own audio server, never the host's desktop.",
         "sunshine_name": "Server Name",
         "sunshine_name_desc": "The name displayed by Moonlight. If not specified, the PC's hostname is used",
         "sw_preset": "SW Presets",
