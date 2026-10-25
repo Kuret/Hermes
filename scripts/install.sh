@@ -364,6 +364,20 @@ EOF
     return 0
   fi
 
+  # Gamescope's wlroots needs newer libwayland, libdrm and libxkbcommon than
+  # Ubuntu 24.04 has, so a build from source fails there just as the
+  # package build does.
+  if [ "$distro" = ubuntu ] && [ "$distro_version" = 24.04 ]; then
+    explain <<'EOF'
+Hermes' Gamescope build is not available for Ubuntu 24.04: the Gamescope it
+is based on needs newer Wayland, libdrm and xkbcommon libraries than 24.04
+ships. Isolated application sessions need Ubuntu 26.04 (or Arch, CachyOS or
+Fedora); the rest of Hermes works on 24.04.
+EOF
+    notes+=("Isolated application sessions are not available on Ubuntu 24.04: Hermes' Gamescope build needs Ubuntu 26.04.")
+    return 0
+  fi
+
   explain <<EOF
 No package was found for ${distro} ${distro_version}; it can be built from
 source into ${GAMESCOPE_SOURCE_PREFIX}, the other place Hermes looks. Gamescope
