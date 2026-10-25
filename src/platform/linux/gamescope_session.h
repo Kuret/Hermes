@@ -150,13 +150,40 @@ namespace platf::gamescope {
   // A per-app option must not redirect an isolated compositor to the host's
   // KMS card/backend, or replace the negotiated mode and connector.
   inline std::optional<std::string> session_option_override(std::span<const std::string> arguments) {
+    constexpr std::string_view reserved[] {
+      "--backend",
+      "--prefer-drm",
+      "--drm-device",
+      "--output-width",
+      "--output-height",
+      "--nested-width",
+      "--nested-height",
+      "--nested-refresh",
+      "--prefer-output"
+    };
     for (const auto &argument : arguments) {
       const std::string_view option = std::string_view {argument}.substr(0, argument.find('='));
-      if (option == "--" || option == "--backend" || option == "--prefer-drm" || option == "--drm-device" || option == "--output-width" || option == "--output-height" || option == "--nested-width" || option == "--nested-height" || option == "--nested-refresh" || option == "--prefer-output") {
+      if (option == "--") {
         return argument;
       }
-      if (argument.size() >= 2 && argument[0] == '-' && argument[1] != '-' && std::string_view {"WHwhrO"}.find(argument[1]) != std::string_view::npos) {
-        return argument;
+      if (option.starts_with("--")) {
+        // getopt_long accepts a unique prefix as well as the full option.
+        for (const auto name : reserved) {
+          if (name.starts_with(option)) {
+            return argument;
+          }
+        }
+      } else if (argument.starts_with('-')) {
+        // GNU short options can be clustered (-eW800). Once an option takes
+        // a value the rest of that token is its value, e.g. -Ffsr, not flags.
+        for (const char flag : std::string_view {argument}.substr(1)) {
+          if (std::string_view {"WHwhrO"}.find(flag) != std::string_view::npos) {
+            return argument;
+          }
+          if (std::string_view {"mSFsoRTC"}.find(flag) != std::string_view::npos) {
+            break;
+          }
+        }
       }
     }
     return std::nullopt;

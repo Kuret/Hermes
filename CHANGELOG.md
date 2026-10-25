@@ -164,7 +164,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   clients explicitly select their private output/input rather than inheriting
   desktop defaults. Partial startup is covered by cleanup before resources are
   acquired, and stopped private audio children are reaped.
-- Isolated-session liveness queries and launch checks no longer hold the
+- Isolated-session liveness queries and launch/resume checks no longer hold the
   global runtime registry while waiting for the account broker. Per-app
   Gamescope flags cannot replace the session-owned KMS card, backend, mode
   or connector.

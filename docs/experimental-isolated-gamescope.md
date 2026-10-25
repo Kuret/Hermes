@@ -102,8 +102,9 @@ and `HERMES_ISOLATED_GAMESCOPE_STEAM_MODE=1` (Steam mode for every app).
 `gamescope-args` may choose rendering, HDR, scaling and Xwayland behavior, but
 cannot replace the DRM backend, scanout card, negotiated dimensions/refresh,
 connector or command separator. Those belong to the session rather than an
-application. Invalid overrides fail the launch with a diagnostic instead of
-starting a compositor against a different display.
+application. Abbreviated long options and grouped short options are checked as
+well. Invalid overrides fail the launch with a diagnostic instead of starting
+a compositor against a different display.
 
 ## Validation needed
 
@@ -117,6 +118,12 @@ a runtime, and rejects a session manager that exits during startup. It uses
 `HERMES_TEST_REQUIRE_PRIVATE_AUDIO=1`; missing dependencies are failures in that
 job, not silently skipped tests. These checks supplement the hardware scenarios
 below; they do not certify DRM scanout or real controller behavior.
+
+`IsolatedRuntimeConcurrencyTest.*` uses the real process registry with a delayed
+broker reply. It checks that app ID/UUID lookups and resume do not block other
+sessions' metadata, and that a runtime removed while the reply is pending cannot
+be resumed. Child-process liveness probes are serialized with teardown without
+holding the registry lock across broker RPCs.
 
 Microphone routing checks encrypted Opus against all eligible sessions sharing
 the peer address, drops ambiguous matches and then associates the endpoint

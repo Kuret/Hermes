@@ -163,7 +163,7 @@ namespace {
   }
 
   TEST(GamescopeSession, AppArgumentsCannotReplaceTheSessionScanoutOrNegotiatedMode) {
-    for (const auto *argument : {"--backend=wayland", "--prefer-drm", "--drm-device=/dev/dri/card0", "--prefer-output", "--output-width=1280", "--output-height", "--nested-width", "--nested-height", "--nested-refresh", "-W1280", "-H", "-w800", "-h", "-r144", "-OHDMI-A-1", "--"}) {
+    for (const auto *argument : {"--backend=wayland", "--back=wayland", "--prefer-dr=/dev/dri/card0", "-eW800", "-fr30", "--prefer-drm", "--drm-device=/dev/dri/card0", "--prefer-output", "--output-width=1280", "--output-height", "--nested-width", "--nested-height", "--nested-refresh", "-W1280", "-H", "-w800", "-h", "-r144", "-OHDMI-A-1", "--"}) {
       const std::vector<std::string> arguments {argument};
       EXPECT_TRUE(session_option_override(arguments)) << argument;
     }
@@ -177,6 +177,10 @@ namespace {
       "--xwayland-count",
       "1",
       "--expose-wayland",
+      "-Ffsr",
+      "-eFfsr",
+      "-s0.5",
+      "-C1000",
       "-e"
     };
     EXPECT_FALSE(session_option_override(arguments));
