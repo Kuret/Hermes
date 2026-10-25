@@ -441,6 +441,15 @@
           <div id="firstFrameTimeoutHelp" class="form-text">{{ $t('apps.session_first_frame_timeout_desc') }}</div>
         </div>
         <!-- what isolated sessions see of the host's /dev -->
+        <div class="mb-3" v-if="platform === 'linux'">
+          <label for="stopDesktopSteam" class="form-label">{{ $t('apps.stop_desktop_steam') }}</label>
+          <select id="stopDesktopSteam" class="form-select" v-model="editForm['stop-desktop-steam']">
+            <option value="auto">{{ $t('apps.stop_desktop_steam_auto') }}</option>
+            <option value="on">{{ $t('apps.isolate_on_plain') }}</option>
+            <option value="off">{{ $t('apps.isolate_off') }}</option>
+          </select>
+          <div class="form-text">{{ $t('apps.stop_desktop_steam_desc') }}</div>
+        </div>
         <template v-for="field in ['isolate-devices', 'isolate-sound']" :key="field">
           <div class="mb-3" v-if="platform === 'linux'">
             <label :for="field" class="form-label">{{ $t('apps.' + field.replace('-', '_')) }}</label>
@@ -621,6 +630,7 @@
     "first-frame-timeout": 0,
     "isolate-devices": "auto",
     "isolate-sound": "auto",
+    "stop-desktop-steam": "auto",
     "terminate-on-pause": false,
     "gamepad": ""
   }

@@ -388,6 +388,13 @@ Both profiles take two fields for what the session sees of the host's `/dev`
 - `isolate-sound`: no `/dev/snd`, so applications only reach sound through
   the session's own audio server.
 
+`stop-desktop-steam` (`auto`, `on`, `off`; `auto` when `cmd` runs `steam`):
+Steam runs once per user and hands a second launch to the running client. If
+the pid in `~/.steam/steam.pid` is a live Steam outside Hermes' sessions,
+Hermes sends it SIGTERM (it logs off and saves its settings, usually in a few
+seconds) before starting the session, and kills it and its children if it is
+still running after 30 seconds.
+
 The `desktop` profile is currently a reference Weston desktop, not a complete
 Plasma session. To use the shared host session, disable
 `hermes_kms_isolated_sessions`; mixing shared and isolated app profiles in one

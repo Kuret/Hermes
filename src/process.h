@@ -122,6 +122,9 @@ namespace proc {
     // can (capabilities), on: refuse to start without it.
     std::string isolate_devices;
     std::string isolate_sound;
+    // Isolated sessions only, auto/on/off. Shut down a Steam client running
+    // outside Hermes before the session starts; auto: when cmd runs steam.
+    std::string stop_desktop_steam;
     int  scale_factor;
     std::chrono::seconds exit_timeout;
   };

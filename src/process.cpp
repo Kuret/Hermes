@@ -10,6 +10,8 @@
 // standard includes
 #include <algorithm>
 #include <atomic>
+#include <csignal>
+#include <cstdio>
 #include <cctype>
 #include <cstdlib>
 #include <chrono>
@@ -202,6 +204,77 @@ namespace proc {
       BOOST_LOG(warning) << "[IsolatedSession] Hermes lacks CAP_SYS_ADMIN and CAP_MKNOD; "
                          << app.name << " sees the host's devices.";
       return platf::session_devices::options_t {};
+    }
+
+    bool runs_steam(const ctx_t &app) {
+      // The same test Steam mode's auto uses, so the two never disagree.
+      return platf::gamescope::steam_mode_for("auto", app.cmd);
+    }
+
+    std::string read_proc_line(pid_t pid, const char *file) {
+      std::ifstream stream {"/proc/" + std::to_string(pid) + "/" + file};
+      std::string line;
+      std::getline(stream, line);
+      return line;
+    }
+
+    /**
+     * @brief Shut down a Steam client running outside Hermes' sessions.
+     *
+     * Steam is one instance per user and hands a second launch to the running
+     * one. SIGTERM shuts it down cleanly (logs off, saves its config) in a few
+     * seconds even when its window is unmapped; `steam -shutdown` would start
+     * Steam's updater if no client were left by then.
+     */
+    void stop_desktop_steam() {
+      const char *home = std::getenv("HOME");
+      pid_t pid = 0;
+      std::ifstream {std::string {home ? home : ""} + "/.steam/steam.pid"} >> pid;
+      // The pid file outlives the client.
+      if (pid <= 0 || read_proc_line(pid, "comm") != "steam") {
+        return;
+      }
+      const auto own = read_proc_line(getpid(), "cgroup");
+      if (own.ends_with(".service") && read_proc_line(pid, "cgroup").starts_with(own)) {
+        return;
+      }
+
+      BOOST_LOG(info) << "[IsolatedSession] Shutting down the desktop's Steam (pid " << pid << ") first.";
+      ::kill(pid, SIGTERM);
+      const auto deadline = std::chrono::steady_clock::now() + 30s;
+      while (std::filesystem::exists("/proc/" + std::to_string(pid)) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(100ms);
+      }
+      if (!std::filesystem::exists("/proc/" + std::to_string(pid))) {
+        BOOST_LOG(info) << "[IsolatedSession] The desktop's Steam has exited.";
+        return;
+      }
+
+      // Not graceful: no log-off, unsaved config and cloud sync are lost.
+      BOOST_LOG(warning) << "[IsolatedSession] The desktop's Steam ignored SIGTERM for 30 s; killing it.";
+      std::vector<pid_t> tree {pid};
+      std::error_code ec;
+      for (bool grew = true; grew;) {
+        grew = false;
+        for (const auto &entry : std::filesystem::directory_iterator {"/proc", ec}) {
+          const auto name = entry.path().filename().string();
+          if (!std::isdigit(static_cast<unsigned char>(name[0]))) {
+            continue;
+          }
+          const pid_t child = std::stoi(name);
+          const auto stat = read_proc_line(child, "stat");
+          const auto end = stat.rfind(')');
+          pid_t parent = 0;
+          if (end != std::string::npos && std::sscanf(stat.c_str() + end + 1, " %*c %d", &parent) == 1 &&
+              std::ranges::contains(tree, parent) && !std::ranges::contains(tree, child)) {
+            tree.push_back(child);
+            grew = true;
+          }
+        }
+      }
+      for (const auto member : tree) {
+        ::kill(member, SIGKILL);
+      }
     }
 
     std::string isolated_runtime_root() {
@@ -1255,6 +1328,31 @@ namespace proc {
       runtime->runtime_dir = "/run/user/" + std::to_string(runtime->account->uid);
     }
 
+    // Only a session of the Hermes user shares its Steam instance.
+    if (!runtime->account && (app.stop_desktop_steam == "on" || (app.stop_desktop_steam != "off" && runs_steam(app)))) {
+      stop_desktop_steam();
+      if (launch_was_cancelled()) {
+        return 503;
+      }
+    }
+
+    std::error_code dir_ec;
+    std::filesystem::create_directories(runtime->assets_dir, dir_ec);
+    // Traversable and readable when the session is somebody else, because that
+    // is the only way it can read the config written here; it holds nothing
+    // secret. Private otherwise, the way it always was.
+    const auto assets_mode = runtime->account ?
+                               static_cast<mode_t>(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) :
+                               static_cast<mode_t>(S_IRWXU);
+    if (dir_ec || ::chmod(runtime->assets_dir.c_str(), assets_mode) != 0) {
+      BOOST_LOG(error) << "[IsolatedSession] Could not create private runtime directory "
+                       << runtime->assets_dir << ": "
+                       << (dir_ec ? dir_ec.message() : std::strerror(errno));
+      return -1;
+    }
+    if (!runtime->account) {
+      link_host_discord_ipc(runtime->runtime_dir);
+    }
 
     // One sink per session, with the layout this client negotiated at launch.
     //
@@ -3769,6 +3867,7 @@ namespace proc {
           ctx.gamescope_steam_mode = mode("gamescope-steam-mode");
           ctx.isolate_devices = mode("isolate-devices");
           ctx.isolate_sound = mode("isolate-sound");
+          ctx.stop_desktop_steam = mode("stop-desktop-steam");
           ctx.gamescope_args = parse_env_val(this_env, app_node.value("gamescope-args", ""));
           ctx.gamepad = app_node.value("gamepad", "");
 
