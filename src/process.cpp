@@ -146,6 +146,7 @@ namespace proc {
       std::string display_name;
       uuid_util::uuid_t display_guid {};
       boost::process::v1::environment env;
+      std::mutex process_mutex;  ///< Serializes child liveness probes with teardown.
       boost::process::v1::child process;
       boost::process::v1::group process_group;
       file_t pipe;
@@ -912,7 +913,7 @@ namespace proc {
     }
 
     bool isolated_runtime_running(const std::shared_ptr<isolated_runtime_t> &runtime) {
-      if (!runtime) {
+      if (!runtime || runtime->stopping.load()) {
         return false;
       }
       // A session with an account of its own is a systemd unit rather than a
@@ -921,9 +922,11 @@ namespace proc {
       if (!runtime->unit.empty()) {
         // A broker restart or slow account operation is not evidence that
         // this session exited. Tear down only after a confirmed inactive reply.
-        return platf::session_broker::query_active(runtime->client_uuid).value_or(true);
+        const bool active = platf::session_broker::query_active(runtime->client_uuid).value_or(true);
+        return active && !runtime->stopping.load();
       }
-      return runtime->process.valid() && runtime->process.running();
+      std::lock_guard<std::mutex> lock(runtime->process_mutex);
+      return !runtime->stopping.load() && runtime->process.valid() && runtime->process.running();
     }
 
     void stop_isolated_runtime(const std::shared_ptr<isolated_runtime_t> &runtime) {
@@ -938,8 +941,9 @@ namespace proc {
         // cgroup, so a game that outlived its compositor goes too, which a
         // process group could only manage for children that stayed in it.
         platf::session_broker::stop(runtime->client_uuid);
-        runtime->unit.clear();
+        // Keep published identity fields immutable for registry snapshots.
       } else {
+        std::lock_guard<std::mutex> lock(runtime->process_mutex);
         terminate_process_group(
           runtime->process,
           runtime->process_group,
@@ -948,8 +952,9 @@ namespace proc {
         runtime->process = boost::process::v1::child {};
         runtime->process_group = boost::process::v1::group {};
       }
-      runtime->env["APOLLO_APP_STATUS"] = "TERMINATING";
-      runtime->env["HERMES_APP_STATUS"] = "TERMINATING";
+      auto stopping_env = runtime->env;
+      stopping_env["APOLLO_APP_STATUS"] = "TERMINATING";
+      stopping_env["HERMES_APP_STATUS"] = "TERMINATING";
 
       for (size_t index = runtime->prep_completed; index > 0; --index) {
         const auto &cmd = runtime->app.prep_cmds[index - 1];
@@ -958,7 +963,7 @@ namespace proc {
         }
         std::error_code ec;
         auto working_dir = runtime->app.working_dir.empty() ?
-                             find_working_directory(cmd.undo_cmd, runtime->env) :
+                             find_working_directory(cmd.undo_cmd, stopping_env) :
                              boost::filesystem::path {runtime->app.working_dir};
         BOOST_LOG(info) << "[IsolatedSession] Executing Undo Cmd: [" << cmd.undo_cmd << ']';
         auto child = platf::run_command(
@@ -966,7 +971,7 @@ namespace proc {
           true,
           cmd.undo_cmd,
           working_dir,
-          runtime->env,
+          stopping_env,
           runtime->pipe.get(),
           ec,
           nullptr
@@ -983,8 +988,6 @@ namespace proc {
       } else if (!runtime->audio_sink.empty()) {
         audio::remove_session_sink(runtime->audio_sink);
       }
-      runtime->audio_sink.clear();
-      runtime->mic_source.clear();
       runtime->device_mirror.reset();
       runtime->namespace_pid = 0;
       if (!runtime->isolated_seat_flag.empty()) {
@@ -2417,9 +2420,17 @@ namespace proc {
     std::shared_ptr<rtsp_stream::launch_session_t> launch_session
   ) {
 #ifndef _WIN32
-    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
-    const auto runtime = find_isolated_client_locked(launch_session->unique_id);
+    std::shared_ptr<isolated_runtime_t> runtime;
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      runtime = find_isolated_client_locked(launch_session->unique_id);
+    }
     if (!isolated_runtime_running(runtime)) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    const auto it = isolated_runtimes.find(runtime->launch_session_id);
+    if (it == isolated_runtimes.end() || it->second != runtime || runtime->stopping.load()) {
       return false;
     }
 

@@ -71,7 +71,7 @@ namespace {
     }
 
     template<typename Query>
-    void check(Query query) {
+    void check(Query query, bool remove_pending_runtime = false) {
       std::promise<void> accepted;
       auto accepted_future = accepted.get_future();
       std::promise<void> release;
@@ -105,6 +105,10 @@ namespace {
         return proc::proc.get_session_env(id)["HERMES_REGISTRY_TEST"].to_string();
       });
       const auto status = lookup.wait_for(250ms);
+      if (remove_pending_runtime && status == std::future_status::ready) {
+        proc::erase_isolated_runtime_for_test(id);
+        seeded = false;
+      }
       release.set_value();
       EXPECT_EQ(status, std::future_status::ready) << "A broker RPC held the global session registry lock";
       EXPECT_EQ(lookup.get(), "ready");
@@ -131,5 +135,23 @@ namespace {
       return proc::proc.running_app_uuid_for_client("runtime-lock-test") == "runtime-test-app";
     });
   }
+
+  TEST_F(IsolatedRuntimeConcurrencyTest, ResumeDoesNotBlockOtherSessionMetadata) {
+    check([]() {
+      auto session = std::make_shared<rtsp_stream::launch_session_t>();
+      session->unique_id = "runtime-lock-test";
+      return proc::proc.prepare_isolated_resume(session) && session->isolated_runtime_owner_id == id;
+    });
+  }
+
+  TEST_F(IsolatedRuntimeConcurrencyTest, ResumeRejectsARuntimeRemovedWhileTheBrokerReplies) {
+    check([]() {
+      auto session = std::make_shared<rtsp_stream::launch_session_t>();
+      session->unique_id = "runtime-lock-test";
+      return !proc::proc.prepare_isolated_resume(session) && !session->isolated_session;
+    },
+          true);
+  }
+
 }  // namespace
 #endif
