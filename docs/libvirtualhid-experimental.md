@@ -11,6 +11,11 @@ The dependency is our fork,
 to commit `14ee6c4717d32b678c2983bfa6c54019b944d421`. Updating the dependency
 requires reviewing and intentionally changing that SHA.
 
+That revision was promoted to the fork's `master` on 2026-10-25 by a
+fast-forward from `38904f3`. Hermes keeps the exact pin; building this branch
+does not require installing a separate libvirtualhid package. Promoting the
+library does not promote Hermes' integration branch or validate streaming.
+
 The library uses C++23, Linux `uinput`/`uhid`, and libevdev. Hermes needs read
 and write access to `/dev/uinput` and `/dev/uhid`; applications consuming
 controller output reports also need the generated `hidraw` node. The packaged
@@ -160,6 +165,93 @@ cmake --build build --target sunshine -j2
 
 The first configure fetches the pinned fork revision. There is no backend
 selection option: Linux builds use libvirtualhid exclusively.
+
+## Manual validation with a DS4 and DualSense
+
+A physical controller connects to the **Hestia client**. Hermes creates a
+separate virtual controller on the host; connecting the physical controller
+directly to the host would bypass the streaming path being tested. A DS4 can
+drive virtual Xbox profiles as well as PlayStation profiles. Different physical
+controllers are not required to exercise each host profile, although synthetic
+tests cannot prove every controller's client-side behavior.
+
+Start with the DS4. Borrowing a DualSense adds useful coverage but need not
+delay the first round. Keep the host kernel, compositor, display/capture mode,
+game, Steam Input setting and stream settings unchanged between the known-good
+Hermes build and this branch. Record whether each physical connection is USB
+or Bluetooth; test the other connection separately if the client supports it.
+
+Install a package built from `experimental/libvirtualhid-input`, including its
+matching session broker and both packaged udev rules. A standalone replacement
+of the Hermes binary does not validate the updated permissions or broker.
+Keep the previous package and a copy of the Hermes configuration for reversal.
+Use the native host first; the production container needs a separate round.
+See [Building](building.md) for dependencies and packaging instructions. On an
+AMD-only build without the CUDA toolkit, configure with
+`-DSUNSHINE_ENABLE_CUDA=OFF -DCUDA_FAIL_ON_MISSING=OFF`.
+
+In Hermes' Input settings, test these rows one at a time. Save, restart Hermes
+between rows after ending the stream, and reconnect so the virtual device is
+recreated. Preserve unrelated configuration settings.
+
+| Physical controller | `gamepad` | `linux_gamepad_backend` | Main purpose |
+| --- | --- | --- | --- |
+| DS4 | `auto` | `auto` | Normal negotiation; a PlayStation client type selects virtual DualSense |
+| DS4 | `ds4` | `auto` | Explicit virtual DS4, native HID and ordinary rumble |
+| DS4 | `xseries` | `auto` | Xbox input-event path and ordinary rumble without requiring hidraw |
+| DualSense, when available | `auto` | `auto` | Second physical controller and normal negotiation |
+| DualSense, when available | `ds5` | `auto` | Explicit virtual DualSense and available client extensions |
+
+For each row:
+
+1. In the streamed desktop, open a controller tester **inside the host
+   session**, then a game with known controller support. Confirm all buttons,
+   D-pad diagonals, both sticks, independent analog triggers and ordinary
+   rumble. Repeat with Steam Input disabled where the game supports the device
+   directly; record its setting rather than mixing the two paths.
+2. Play for at least 30 minutes on the initial DS4 automatic profile. Check for
+   stuck inputs, duplicate controllers, intermittent rumble and unexpected
+   disconnections. Use the other rows for shorter focused checks first.
+3. Disconnect and reconnect the physical controller during a stream, then
+   disconnect and resume Hestia. Repeat five times. Buttons, axes and rumble
+   must still work, and no input may remain held after a fresh session starts.
+4. For PlayStation profiles, check touchpad click, one/two-finger contacts,
+   motion and battery only when the client actually advertises and forwards
+   them. Record unsupported client features as **not tested**, not passed.
+   Mouse movement alone does not prove native controller touchpad reports.
+   Adaptive triggers require a compatible game, client and physical transport;
+   ordinary rumble does not validate them or advanced haptics.
+
+Then test two independent clients with isolated sessions. The second client
+can initially use keyboard/mouse, so a second physical controller is optional.
+Verify that inputs from one client never reach the other session or the local
+desktop. Start the second session while the first is playing; stop it and
+confirm the first remains responsive. With two controllers available, add
+simultaneous controller input and verify that rumble reaches only its owner.
+If only one client is available, mark concurrent streaming as pending; the
+two-account CI is not a substitute for this end-to-end check.
+
+Finally, with no valuable work open, restart Hermes and resume a session.
+Repeat once after reboot to cover installed rules and service startup. When
+finished, reinstall the previous package, restore the saved configuration if
+needed, and confirm that a stream still starts. Do not run the disposable-VM
+account test script on the daily-use host to obtain a passing result.
+
+For each result, record the Hermes commit/package, Hestia version and client
+OS, host kernel/compositor, physical controller and USB/Bluetooth connection,
+the two settings above, game and Steam Input setting, expected/observed behavior
+and time of failure. Keep the Hermes log from the same attempt; for an
+isolated-session failure also keep the session-broker journal. CMake configure
+output must identify `Hermes Linux input backend: MrOz59/libvirtualhid`;
+controller-selection messages show the profile chosen by `auto`. If more
+detail is needed, repeat the failure with `min_log_level = debug`, then
+restore the previous log level. Review logs before sharing them.
+
+The merge gate is a repeatable DS4 stream, the profile and lifecycle checks,
+concurrent isolated sessions, and package update/reversal without manual
+permission grants. DualSense results expand that evidence. Switch/Xbox
+physical-client behavior, unavailable PlayStation driver paths and the
+production container remain explicitly unvalidated until tested separately.
 
 ## Validation
 

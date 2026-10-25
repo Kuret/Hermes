@@ -4,6 +4,23 @@ Checkpoint atualizado em 25/10/2026, Australia/Sydney, após a continuação e
 validação das branches experimentais. **Não fazer merge na
 main do Hermes nem alterar Hermes-KMS nesta retomada sem nova autorização.**
 
+## Biblioteca promovida; homologação do Hermes
+
+Com autorização do mantenedor, a `master` de `MrOz59/libvirtualhid` avançou
+de `38904f3f251c6387b4c77de54eb9ce2fc1e67bdf` para
+`14ee6c4717d32b678c2983bfa6c54019b944d421` por fast-forward em 25/10/2026.
+São os mesmos quatro commits já compilados e testados com GCC 13 e Clang 18,
+incluindo os quatro testes PlayStation experimentais aprovados; os dois skips
+dependentes de xpadneo/hid-playstation continuam registrados abaixo. A promoção
+dispara novamente a CI na `master`; não cria uma release da biblioteca.
+
+O pin do Hermes já aponta para esse SHA e permanece fixo. A main do Hermes
+continua sem merge. O mantenedor dispõe de um DS4 e pode conseguir um DualSense
+emprestado; o [roteiro de homologação](libvirtualhid-experimental.md#manual-validation-with-a-ds4-and-dualsense)
+usa esse hardware para validar perfis PlayStation e Xbox, reconexão, rumble,
+duas sessões, instalação e reversão do pacote. O segundo cliente pode começar
+com teclado/mouse. Nenhum resultado manual é presumido pelo roteiro.
+
 ## Continuação: inicialização e liveness do broker
 
 Esta rodada mantém o pin da biblioteca em `14ee6c4` e corrige uma falha antes
