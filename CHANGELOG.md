@@ -17,7 +17,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Hermes-KMS driver (built with DKMS, with `hermes-kms-setup` run for the
   user), experimental isolated sessions with Hermes' Gamescope build, and
   streaming the login screen (`hermes --prelogin enable`, the `input` group
-  and SDDM's Wayland greeter). `--dry-run` shows what it would do.
+  and SDDM's Wayland greeter). `--dry-run` shows what it would do. On
+  Ubuntu 24.04 it says that isolated sessions through Gamescope are
+  unavailable for now: Hermes' Gamescope build needs newer libwayland, libdrm
+  and libxkbcommon than 24.04 ships, and is packaged for Ubuntu 26.04, Fedora
+  43/44 and Arch/CachyOS.
 - Same-user isolated sessions that keep out of the desktop's way, from
   d3adb5's work in [#57]:
   - each session runs its own PipeWire and WirePlumber, with no hardware and

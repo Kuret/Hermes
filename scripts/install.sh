@@ -192,6 +192,13 @@ kernel_headers_package() {
   esac
 }
 
+# Gamescope's wlroots needs newer libwayland, libdrm and libxkbcommon than
+# Ubuntu 24.04 ships, so neither a package nor a source build of Hermes'
+# Gamescope exists there.
+gamescope_unavailable() {
+  [ "$distro" = ubuntu ] && [ "$distro_version" = 24.04 ]
+}
+
 config_file() {
   echo "${XDG_CONFIG_HOME:-$HOME/.config}/hermes/hermes.conf"
 }
@@ -364,17 +371,8 @@ EOF
     return 0
   fi
 
-  # Gamescope's wlroots needs newer libwayland, libdrm and libxkbcommon than
-  # Ubuntu 24.04 has, so a build from source fails there just as the
-  # package build does.
-  if [ "$distro" = ubuntu ] && [ "$distro_version" = 24.04 ]; then
-    explain <<'EOF'
-Hermes' Gamescope build is not available for Ubuntu 24.04: the Gamescope it
-is based on needs newer Wayland, libdrm and xkbcommon libraries than 24.04
-ships. Isolated application sessions need Ubuntu 26.04 (or Arch, CachyOS or
-Fedora); the rest of Hermes works on 24.04.
-EOF
-    notes+=("Isolated application sessions are not available on Ubuntu 24.04: Hermes' Gamescope build needs Ubuntu 26.04.")
+  if gamescope_unavailable; then
+    warn "Isolated sessions through Gamescope are unavailable on Ubuntu 24.04 for now."
     return 0
   fi
 
@@ -422,6 +420,17 @@ EOF
 
 install_isolated() {
   step "Isolated sessions (experimental)"
+  if gamescope_unavailable; then
+    warn "Isolated sessions through Gamescope are unavailable on Ubuntu 24.04 for now."
+    explain <<'EOF'
+The Gamescope they run in needs newer Wayland, libdrm and xkbcommon libraries
+than Ubuntu 24.04 ships, so Hermes' Gamescope build is not packaged for it.
+They work on Ubuntu 26.04, Fedora 43/44, Arch and CachyOS. The rest of Hermes
+works on 24.04 as usual.
+EOF
+    notes+=("Isolated sessions through Gamescope are unavailable on Ubuntu 24.04 for now.")
+    return 0
+  fi
   if [ "$did_kms" = 0 ]; then
     info "Skipped: isolated sessions need Hermes-KMS."
     return 0

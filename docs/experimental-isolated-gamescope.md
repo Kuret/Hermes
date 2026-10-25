@@ -13,6 +13,11 @@ authorship. Input is the MrOz59/libvirtualhid stack from
 
 ## Setting it up
 
+Not available on Ubuntu 24.04 for now: the Gamescope these sessions run in
+needs newer libwayland, libdrm and libxkbcommon than 24.04 ships, so Hermes'
+Gamescope build is packaged for Ubuntu 26.04, Fedora 43/44 and Arch/CachyOS
+only.
+
 `scripts/install.sh` does all of this and asks before each part:
 
 1. Hermes-KMS, configured for your user with
