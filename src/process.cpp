@@ -27,8 +27,14 @@
 
 #ifndef _WIN32
   #include <fcntl.h>
+  #include <poll.h>
+  #include <signal.h>
+  #include <spawn.h>
+  #include <sys/wait.h>
   #include <unistd.h>
   #include <xf86drm.h>
+
+  #include "platform/linux/gamescope_session.h"
   // For the GBM allocation probe: picking the render node an isolated session
   // renders on is the same question the capture path answers, so it uses the
   // same answer rather than a second heuristic. Compiles to "yes" where Wayland
@@ -428,6 +434,121 @@ namespace proc {
       }
       std::sort(candidates.begin(), candidates.end());
       return candidates.empty() ? std::string {} : candidates.front();
+    }
+
+    /**
+     * @brief What `gamescope --help` prints, or nothing if it could not be run.
+     *
+     * Gamescope writes its usage to stderr and exits 0, so both streams are
+     * captured. It runs without a shell and against a deadline: a build that
+     * hangs here must not hang a launch with it.
+     */
+    std::optional<std::string> gamescope_help_text(const std::string &binary) {
+      int pipe_fds[2];
+      if (::pipe2(pipe_fds, O_CLOEXEC) != 0) {
+        return std::nullopt;
+      }
+
+      posix_spawn_file_actions_t actions;
+      ::posix_spawn_file_actions_init(&actions);
+      ::posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+      ::posix_spawn_file_actions_adddup2(&actions, pipe_fds[1], STDOUT_FILENO);
+      ::posix_spawn_file_actions_adddup2(&actions, pipe_fds[1], STDERR_FILENO);
+      std::string help_option {"--help"};
+      std::string program {binary};
+      char *argv[] {program.data(), help_option.data(), nullptr};
+      pid_t pid = -1;
+      const int spawn_error = ::posix_spawn(&pid, program.c_str(), &actions, nullptr, argv, environ);
+      ::posix_spawn_file_actions_destroy(&actions);
+      ::close(pipe_fds[1]);
+      if (spawn_error != 0) {
+        ::close(pipe_fds[0]);
+        BOOST_LOG(warning) << "[IsolatedSession] Could not run " << binary << " --help: "
+                           << std::strerror(spawn_error);
+        return std::nullopt;
+      }
+
+      // Usage text is a few kilobytes; anything far past that is not it.
+      constexpr std::size_t output_limit = 1 << 20;
+      const auto deadline = std::chrono::steady_clock::now() + 3s;
+      std::string output;
+      bool complete = false;
+      for (;;) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - std::chrono::steady_clock::now()
+        );
+        if (remaining <= 0ms) {
+          break;
+        }
+        pollfd pending {pipe_fds[0], POLLIN, 0};
+        const int ready = ::poll(&pending, 1, static_cast<int>(remaining.count()));
+        if (ready < 0 && errno == EINTR) {
+          continue;
+        }
+        if (ready <= 0) {
+          break;
+        }
+        char buffer[4096];
+        const auto read_size = ::read(pipe_fds[0], buffer, sizeof(buffer));
+        if (read_size < 0 && errno == EINTR) {
+          continue;
+        }
+        if (read_size <= 0) {
+          complete = read_size == 0;
+          break;
+        }
+        output.append(buffer, static_cast<std::size_t>(read_size));
+        if (output.size() > output_limit) {
+          break;
+        }
+      }
+      ::close(pipe_fds[0]);
+      if (!complete) {
+        ::kill(pid, SIGKILL);
+      }
+      int status = 0;
+      while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+      }
+      if (!complete) {
+        BOOST_LOG(warning) << "[IsolatedSession] " << binary << " --help did not finish in time.";
+        return std::nullopt;
+      }
+      return output;
+    }
+
+    /**
+     * @brief The scanout option this Gamescope build accepts, if any.
+     *
+     * Asked once per binary and remembered until the file changes, so an
+     * update to Gamescope is noticed without restarting Hermes.
+     */
+    std::optional<platf::gamescope::drm_selector_e> gamescope_drm_selector(const std::string &binary) {
+      static std::mutex probe_mutex;
+      static std::string probed_binary;
+      static std::filesystem::file_time_type probed_mtime {};
+      static std::optional<platf::gamescope::drm_selector_e> probed_selector;
+
+      std::error_code mtime_ec;
+      const auto mtime = std::filesystem::last_write_time(binary, mtime_ec);
+
+      std::lock_guard<std::mutex> lock(probe_mutex);
+      if (!mtime_ec && binary == probed_binary && mtime == probed_mtime) {
+        return probed_selector;
+      }
+
+      const auto help = gamescope_help_text(binary);
+      if (!help) {
+        // Not remembered: a probe that could not run says nothing about the
+        // build, and the next launch should ask again.
+        return std::nullopt;
+      }
+      const auto selector = platf::gamescope::drm_selector_from_help(*help);
+      if (!mtime_ec) {
+        probed_binary = binary;
+        probed_mtime = mtime;
+        probed_selector = selector;
+      }
+      return selector;
     }
 
     /**
@@ -1255,7 +1376,8 @@ namespace proc {
         BOOST_LOG(error) << "[IsolatedSession] Application profile requires a command.";
         return -1;
       }
-      if (boost::process::v1::search_path("gamescope").empty()) {
+      const auto gamescope_binary = boost::process::v1::search_path("gamescope").string();
+      if (gamescope_binary.empty()) {
         BOOST_LOG(error) << "[IsolatedSession] Application profile requires gamescope.";
         return -1;
       }
@@ -1269,52 +1391,85 @@ namespace proc {
         runtime->env.erase(name);
       }
 
-      // Explicit scanout device selection requires a patched Gamescope.
-      // relil/gamescope-eGPU uses --prefer-drm; older downstream builds
-      // may expose --drm-device. Keep both as explicit opt-ins.
-      std::string gamescope_options;
-      if (const char *drm_device = std::getenv("HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE");
-          drm_device && *drm_device) {
-        const std::string device {drm_device};
-        const auto card_name = std::filesystem::path {device}.filename().string();
-        const bool valid_card = device == "/dev/dri/" + card_name &&
-                                card_name.starts_with("card") &&
-                                card_name.size() > 4 &&
-                                std::all_of(card_name.begin() + 4, card_name.end(),
-                                            [](unsigned char ch) { return std::isdigit(ch) != 0; });
-        if (valid_card) {
-          const char *selector = std::getenv("HERMES_ISOLATED_GAMESCOPE_DRM_FLAG");
-          const std::string_view flag = selector && *selector ?
-                                          std::string_view {selector} :
-                                          std::string_view {"--drm-device"};
-          if (flag == "--drm-device" || flag == "--prefer-drm") {
-            gamescope_options += " " + std::string {flag} + " " + device;
-          } else {
-            BOOST_LOG(warning) << "[IsolatedSession] Unsupported Gamescope DRM selector; "
-                               << "expected --drm-device or --prefer-drm.";
-          }
-        } else {
-          BOOST_LOG(warning) << "[IsolatedSession] Ignoring invalid HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE: "
-                             << device;
-        }
+      // Gamescope scans out on this session's own Hermes-KMS card and renders
+      // on the real GPU. Upstream cannot be told the two apart: it opens the
+      // primary node of the GPU it renders with, which is the card the host's
+      // desktop is on, and either fails to become DRM master there or fights
+      // the desktop for it. So the card goes to Gamescope explicitly, and a
+      // build that cannot take it is refused rather than let loose on the
+      // host's display.
+      //
+      // The card is this session's, never a process-wide setting: two
+      // sessions are two cards.
+      if (const char *legacy_device = std::getenv("HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE");
+          legacy_device && *legacy_device) {
+        BOOST_LOG(warning) << "[IsolatedSession] HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE is no longer read; "
+                           << "each session scans out on its own card, here "
+                           << runtime->drm_device_path << '.';
       }
-      if (const char *steam_mode = std::getenv("HERMES_ISOLATED_GAMESCOPE_STEAM_MODE");
-          steam_mode && std::string_view {steam_mode} == "1") {
-        gamescope_options += " -e";
+      if (!platf::gamescope::is_primary_card_path(runtime->drm_device_path)) {
+        BOOST_LOG(error) << "[IsolatedSession] Session card " << runtime->drm_device_path
+                         << " is not a DRM primary node; Gamescope cannot scan out on it.";
+        return 503;
       }
 
-      launch_command = std::format(
-        "gamescope --backend=drm -W {} -H {} -w {} -h {} -r {} "
-        "--xwayland-count 1 --expose-wayland --force-windows-fullscreen{}{} -- {}",
-        width,
-        height,
-        width,
-        height,
-        refresh_hz,
-        connector.empty() ? std::string {} : " -O " + connector,
-        gamescope_options,
-        app.cmd
-      );
+      std::optional<platf::gamescope::drm_selector_e> selector;
+      if (const char *forced = std::getenv("HERMES_ISOLATED_GAMESCOPE_DRM_FLAG");
+          forced && *forced) {
+        selector = platf::gamescope::drm_selector_from_override(forced);
+        if (!selector) {
+          BOOST_LOG(warning) << "[IsolatedSession] Ignoring HERMES_ISOLATED_GAMESCOPE_DRM_FLAG=" << forced
+                             << "; expected --prefer-drm, --drm-device or none.";
+        }
+      }
+      if (!selector) {
+        selector = gamescope_drm_selector(gamescope_binary);
+      }
+      if (!selector) {
+        BOOST_LOG(error) << "[IsolatedSession] " << gamescope_binary
+                         << " cannot scan out on a different device than it renders with, so it "
+                            "would open the host GPU's display instead of this session's card. Use a "
+                            "Gamescope with --prefer-drm (ValveSoftware/gamescope#2220), or set "
+                            "HERMES_ISOLATED_GAMESCOPE_DRM_FLAG for a build whose --help does not "
+                            "list the option it accepts.";
+        return 503;
+      }
+      if (*selector == platf::gamescope::drm_selector_e::none) {
+        BOOST_LOG(warning) << "[IsolatedSession] Launching Gamescope without a scanout device "
+                              "(HERMES_ISOLATED_GAMESCOPE_DRM_FLAG=none); it will pick the GPU it "
+                              "renders with, not " << runtime->drm_device_path << '.';
+      } else {
+        // Also read by #2220 when the flag is absent. Setting both costs
+        // nothing and keeps the device in the session's environment, where a
+        // Gamescope started by a script inside the session finds it too.
+        runtime->env["GAMESCOPE_PREFER_DRM"] = runtime->drm_device_path;
+      }
+
+      // The session seat starts empty: its virtual devices are created when
+      // the stream starts, after Gamescope is up. wlroots' libinput backend
+      // refuses to start on a seat with no devices unless told to - the same
+      // thing weston is told with --continue-without-input. Harmless where
+      // the build still reads seat0.
+      runtime->env["WLR_LIBINPUT_NO_DEVICES"] = "1";
+
+      // Steam mode is per application. The environment switch predates the
+      // setting and stays as a process-wide override for testing.
+      bool steam_mode = app.gamescope_steam_mode;
+      if (const char *forced_steam_mode = std::getenv("HERMES_ISOLATED_GAMESCOPE_STEAM_MODE");
+          forced_steam_mode && std::string_view {forced_steam_mode} == "1") {
+        steam_mode = true;
+      }
+
+      launch_command = platf::gamescope::launch_command({
+        .width = width,
+        .height = height,
+        .refresh_hz = refresh_hz,
+        .connector = connector,
+        .selector = *selector,
+        .scanout_card = runtime->drm_device_path,
+        .steam_mode = steam_mode,
+        .command = app.cmd,
+      });
     } else {
       const auto profile = load_compositor_profile(config::video.hermes_kms_session_compositor);
       if (!profile) {
@@ -1502,10 +1657,25 @@ namespace proc {
       }
     }
 
+    // How long the compositor has to attach a framebuffer to the session's
+    // output, which is what Hermes-KMS reports as ready. A desktop compositor
+    // does that as it starts. An application session can take far longer to
+    // put anything up - Steam's gamepad UI under Gamescope was reported in #57
+    // to need up to 30 seconds - and giving up at the old five seconds failed
+    // sessions that were only slow. A compositor that dies is still caught on
+    // the next poll, so the longer deadline costs nothing when it fails.
+    const auto first_frame_timeout = app.first_frame_timeout.count() > 0 ?
+                                       app.first_frame_timeout :
+                                       runtime->profile == "application" ?
+                                       std::chrono::seconds {30} :
+                                       std::chrono::seconds {5};
+    const auto first_frame_started = std::chrono::steady_clock::now();
+    const auto first_frame_deadline = first_frame_started + first_frame_timeout;
+    bool reported_slow_first_frame = false;
     bool scanout_ready = false;
     int active_width = 0;
     int active_height = 0;
-    for (int attempt = 0; attempt < 100; ++attempt) {
+    while (std::chrono::steady_clock::now() < first_frame_deadline) {
       if (launch_was_cancelled()) {
         return 503;
       }
@@ -1533,11 +1703,19 @@ namespace proc {
       if (scanout_ready && active_width > 0 && active_height > 0) {
         break;
       }
+      if (!reported_slow_first_frame &&
+          std::chrono::steady_clock::now() - first_frame_started >= 5s) {
+        reported_slow_first_frame = true;
+        BOOST_LOG(info) << "[IsolatedSession] Still waiting for the first frame on "
+                        << runtime->display_name << "; allowing up to "
+                        << first_frame_timeout.count() << "s.";
+      }
       std::this_thread::sleep_for(50ms);
     }
     if (!scanout_ready) {
-      BOOST_LOG(error) << "[IsolatedSession] Timed out waiting for compositor scanout on "
-                       << runtime->display_name;
+      BOOST_LOG(error) << "[IsolatedSession] No frame reached " << runtime->display_name
+                       << " within " << first_frame_timeout.count()
+                       << "s. Raise first-frame-timeout for this app if it is only slow to start.";
       return 503;
     }
     if (launch_was_cancelled()) {
@@ -3446,6 +3624,27 @@ namespace proc {
             BOOST_LOG(warning) << "Unknown session-type '" << ctx.session_type
                                << "' for app " << name << "; using auto.";
             ctx.session_type = "auto";
+          }
+          ctx.gamescope_steam_mode = app_node.value("gamescope-steam-mode", false);
+          {
+            // Accepted as a number or a numeric string, the way an edited
+            // apps.json tends to hold it; anything else means the default.
+            int first_frame_timeout = 0;
+            if (const auto it = app_node.find("first-frame-timeout"); it != app_node.end()) {
+              if (it->is_number_integer()) {
+                first_frame_timeout = it->get<int>();
+              } else if (it->is_string()) {
+                try {
+                  first_frame_timeout = std::stoi(it->get<std::string>());
+                } catch (const std::exception &) {
+                  first_frame_timeout = 0;
+                }
+              }
+            }
+            if (first_frame_timeout < 0) {
+              BOOST_LOG(warning) << "Negative first-frame-timeout for app " << name << "; using the default.";
+            }
+            ctx.first_frame_timeout = std::chrono::seconds {std::clamp(first_frame_timeout, 0, 600)};
           }
           ctx.virtual_display_layout = app_node.value("virtual-display-layout", "auto");
           if (ctx.virtual_display_layout != "auto" &&

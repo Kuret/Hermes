@@ -103,6 +103,12 @@ namespace proc {
     // shared: legacy marker; rejected while isolation is enabled.
     // application/desktop: force the corresponding isolated profile.
     std::string session_type;
+    // Isolated application sessions only: run Gamescope in Steam mode (-e,
+    // with a second Xwayland), for Steam's gamepad UI and overlay.
+    bool gamescope_steam_mode = false;
+    // Isolated sessions only: how long the compositor has to put its first
+    // frame on the session's card. Zero picks the profile's default.
+    std::chrono::seconds first_frame_timeout {0};
     // auto: extend the virtual display beside the physical outputs and follow
     // the global exclusive option. extend/detached/mirror/exclusive: force that
     // layout for this app's session, overriding the global option.

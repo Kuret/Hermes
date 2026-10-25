@@ -417,6 +417,22 @@
           </select>
           <div class="form-text">{{ $t('apps.session_type_desc') }}</div>
         </div>
+        <!-- Steam mode for isolated Gamescope sessions -->
+        <Checkbox v-if="platform === 'linux' && editForm['session-type'] !== 'desktop'"
+                  class="mb-3"
+                  id="gamescopeSteamMode"
+                  label="apps.session_steam_mode"
+                  desc="apps.session_steam_mode_desc"
+                  v-model="editForm['gamescope-steam-mode']"
+                  default="false"
+        ></Checkbox>
+        <!-- how long an isolated session has to show its first frame -->
+        <div class="mb-3" v-if="platform === 'linux'">
+          <label for="firstFrameTimeout" class="form-label">{{ $t('apps.session_first_frame_timeout') }}</label>
+          <input type="number" class="form-control monospace" id="firstFrameTimeout" aria-describedby="firstFrameTimeoutHelp"
+                 v-model="editForm['first-frame-timeout']" min="0" max="600" placeholder="0" />
+          <div id="firstFrameTimeoutHelp" class="form-text">{{ $t('apps.session_first_frame_timeout_desc') }}</div>
+        </div>
         <!-- use app identity -->
         <Checkbox class="mb-3"
                   id="useAppIdentity"
@@ -581,6 +597,8 @@
     "virtual-display-layout": "auto",
     "unlock-host-session": false,
     "session-type": "auto",
+    "gamescope-steam-mode": false,
+    "first-frame-timeout": 0,
     "terminate-on-pause": false,
     "gamepad": ""
   }
@@ -951,6 +969,7 @@
         }
         this.editForm["exit-timeout"] = parseInt(this.editForm["exit-timeout"]) || 5
         this.editForm["scale-factor"] = parseInt(this.editForm["scale-factor"]) || 100
+        this.editForm["first-frame-timeout"] = Math.min(600, Math.max(0, parseInt(this.editForm["first-frame-timeout"]) || 0))
         this.editForm["image-path"] = this.editForm["image-path"].toString().trim().replace(/"/g, '');
         delete this.editForm.id;
         delete this.editForm.launching;
