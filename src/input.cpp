@@ -1791,12 +1791,20 @@ namespace input {
       session_tag
     );
 
-    // Workaround to ensure new frames will be captured when a client connects
-    task_pool.pushDelayed([input]() {
-      platf::move_mouse(*input->platform_input, 1, 1);
-      platf::move_mouse(*input->platform_input, -1, -1);
-    },
-                          100ms);
+    // Workaround to ensure new frames will be captured when a client connects.
+    //
+    // Not for an isolated session. Its capture reads the framebuffer the
+    // session's Hermes-KMS card holds and repeats the last image when nothing
+    // changes, so there is nothing to wake. And the nudge is real input on the
+    // session's own seat, which Gamescope answers by showing its cursor in the
+    // middle of Steam's gamepad UI before the client has moved anything (#57).
+    if (session_tag.empty()) {
+      task_pool.pushDelayed([input]() {
+        platf::move_mouse(*input->platform_input, 1, 1);
+        platf::move_mouse(*input->platform_input, -1, -1);
+      },
+                            100ms);
+    }
 
     return input;
   }
