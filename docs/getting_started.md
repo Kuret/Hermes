@@ -116,12 +116,15 @@ session; only the kernel module has to exist on the host. See
 
 A virtual display needs a kernel module, installed separately from Hermes:
 
-- **Hermes-KMS** (default, zero-copy) — <https://github.com/MrOz59/Hermes-KMS>,
-  installed through DKMS. The overview covers the install and the
-  `initial_enabled=0` module option it needs.
-- **EVDI** — the supported alternative, selected automatically when Hermes-KMS
-  is unavailable. On Arch it lives in the AUR (`paru -S evdi`), not the official
-  repositories, so no package depends on it.
+- **EVDI** — the default `virtual_display_backend` and the stable backend. On
+  Arch it lives in the AUR (`paru -S evdi`), not the official repositories, so
+  no package depends on it.
+- **Hermes-KMS** (zero-copy, opt-in with `virtual_display_backend = hermes_kms`)
+  — <https://github.com/MrOz59/Hermes-KMS>, installed through DKMS. Hermes 0.6.0
+  needs the driver's `v0.4.0` tag; a nightly works with `v0.4.0` or `main`.
+  [The overview](../README.md#installing-the-hermes-kms-driver) covers the
+  install and the `initial_enabled=0` module option it needs. Hermes does not
+  fall back to EVDI on its own when Hermes-KMS is selected but unavailable.
 
 The Audio/Video settings tab shows a live diagnostic and a step-by-step install
 guide when either driver is missing.
