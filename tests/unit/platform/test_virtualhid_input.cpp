@@ -505,11 +505,27 @@ namespace {
     ASSERT_TRUE(gamepad.adapter->close().ok());
     platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_DOWN, 2, 0.7F, 0.8F});
     EXPECT_FALSE(gamepad.touch_pointer_ids[1]);
+    EXPECT_FALSE(gamepad.adapter->state().touchpad_contacts[1].active);
     EXPECT_EQ(gamepad.next_touch_id, 1);
     platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_UP, 1});
     EXPECT_EQ(gamepad.touch_pointer_ids[0], 1U);
+    EXPECT_TRUE(gamepad.adapter->state().touchpad_contacts[0].active);
     platf::gamepad::touch(&raw, {id, LI_TOUCH_EVENT_CANCEL_ALL});
     EXPECT_EQ(gamepad.touch_pointer_ids[0], 1U);
+    EXPECT_TRUE(gamepad.adapter->state().touchpad_contacts[0].active);
+  }
+
+  TEST_F(VirtualHidInputTest, InvalidControllerMotionDoesNotBlockFollowingButtonUpdates) {
+    platf::input_raw_t raw {"hermes-kms-1", fake_runtime()};
+    const platf::gamepad_id_t id {0, 0};
+    ASSERT_EQ(platf::gamepad::alloc(&raw, id, {}, feedback), 0);
+    platf::gamepad::motion(&raw, {id, LI_MOTION_TYPE_ACCEL, 1.0F, 2.0F, 3.0F});
+    platf::gamepad::motion(&raw, {id, LI_MOTION_TYPE_ACCEL, std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F});
+    platf::gamepad::update(&raw, 0, {.buttonFlags = platf::A});
+    const auto &submitted = raw.gamepads[0]->adapter->gamepad()->last_submitted_state();
+    EXPECT_TRUE(submitted.buttons.test(lvh::GamepadButton::a));
+    ASSERT_TRUE(submitted.acceleration);
+    EXPECT_FLOAT_EQ(submitted.acceleration->x, 1.0F);
   }
 
   TEST_F(VirtualHidInputTest, FeedbackUsesClientIndexDeduplicatesAndDoesNotOwnController) {

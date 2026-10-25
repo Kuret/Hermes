@@ -21,8 +21,30 @@ CLIENT_B="5f3ab1c2-0000-4000-8000-000000000002"
 SOCKET="/run/hermes/session-broker.sock"
 STATE="/var/lib/hermes/session-users.map"
 HOMES="/var/lib/hermes/sessions"
+INPUT_PROBE_PID=""
+HID_PROBE_PID=""
+SDL_A_PID=""
+SDL_B_PID=""
+INPUT_TEST_ROOT=""
+
+cleanup_input_probe() {
+	for pid in "$SDL_A_PID" "$SDL_B_PID"; do
+		[ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+	done
+	if [ -n "$HID_PROBE_PID" ]; then
+		kill -TERM "$HID_PROBE_PID" 2>/dev/null || true
+		wait "$HID_PROBE_PID" 2>/dev/null || true
+	fi
+	if [ -n "$INPUT_PROBE_PID" ]; then
+		kill -TERM "$INPUT_PROBE_PID" 2>/dev/null || true
+		wait "$INPUT_PROBE_PID" 2>/dev/null || true
+	fi
+	[ -z "$INPUT_TEST_ROOT" ] || rm -rf -- "$INPUT_TEST_ROOT"
+}
+trap cleanup_input_probe EXIT
 
 [ "$(id -u)" -eq 0 ] || { printf 'must run as root; this creates accounts\n' >&2; exit 2; }
+systemd-detect-virt --vm --quiet || { printf 'must run inside a disposable VM; this installs system units and creates accounts\n' >&2; exit 2; }
 [ -x "$BROKER" ] || { printf 'broker not found: %s\n  build: cmake --build build --target hermes-session-broker\n' "$BROKER" >&2; exit 2; }
 
 # virtme-ng shares the host's filesystem as the host user and bind-mounts a few
@@ -78,6 +100,9 @@ install -Dm644 "$REPO/src_assets/linux/misc/hermes-session-broker.socket" \
 install -Dm644 "$REPO/src_assets/linux/misc/hermes-sysusers.conf" /usr/lib/sysusers.d/hermes.conf
 install -Dm644 "$REPO/src_assets/linux/misc/10-hermes-session-deny.rules" \
 	/usr/share/polkit-1/rules.d/10-hermes-session-deny.rules
+install -Dm644 "$REPO/src_assets/linux/misc/60-hermes.rules" /run/udev/rules.d/60-hermes.rules
+install -Dm644 "$REPO/src_assets/linux/misc/99-hermes-session-input.rules" /run/udev/rules.d/99-hermes-session-input.rules
+udevadm control --reload-rules
 # The unit lists this under ReadWritePaths, and systemd refuses to start a unit
 # whose ReadWritePaths does not exist.
 mkdir -p /var/lib/hermes
@@ -138,7 +163,7 @@ expect 'LIST reports both'      $'LIST\n' "OK $CLIENT_A=hermes-s01 $CLIENT_B=her
 # ---------------------------------------------------------------- sessions ---
 expect 'nothing is running yet' $'STATUS '"$CLIENT_A"$'\n' 'OK inactive hermes-session-01.service'
 
-START=$'START '"$CLIENT_A"$'\nARG /usr/bin/sleep\nARG 600\nENV HERMES_TEST=yes\nEND\n'
+START=$'START '"$CLIENT_A"$'\nARG /usr/bin/sleep\nARG 600\nENV HERMES_TEST=yes\nENV XDG_SEAT=hermes-kms-1\nEND\n'
 expect 'START asks systemd for a unit' "$START" 'OK hermes-session-01.service'
 
 for _ in $(seq 50); do
@@ -159,6 +184,10 @@ ok 'the command really runs under the session uid'
 [ -d "/run/user/$UID_A" ] || fail 'lingering did not create the runtime directory'
 ok 'lingering gave the session a runtime directory'
 
+for _ in $(seq 50); do
+	[[ "$(ask $'STATUS '"$CLIENT_A"$'\n')" == 'OK active '* ]] && break
+	sleep 0.1
+done
 expect 'STATUS reports it active' $'STATUS '"$CLIENT_A"$'\n' 'OK active hermes-session-01.service'
 expect 'no Wayland socket yet'    $'SOCKET '"$CLIENT_A"$'\n' 'ERR notfound*'
 
@@ -177,6 +206,142 @@ ok 'the scoped unit is PartOf the session unit'
 
 expect 'a bad SCOPE is rejected' $'START '"$CLIENT_A"$'\nARG /usr/bin/true\nSCOPE App\nEND\n' 'ERR request*'
 expect 'a relative command is rejected' $'START '"$CLIENT_A"$'\nARG true\nEND\n' 'ERR request*'
+
+# The broker itself, not the harness, must grant the two accounts access.
+# Keep the root-owned producer alive through STOP to verify actual revocation.
+expect 'a duplicate input lease is rejected' "$START" 'ERR input*'
+expect 'a malformed seat is rejected' $'START '"$CLIENT_B"$'\nARG /usr/bin/true\nENV XDG_SEAT=../../dev/input\nEND\n' 'ERR request*'
+expect 'a second client cannot take an occupied seat' $'START '"$CLIENT_B"$'\nARG /usr/bin/sleep\nARG 600\nENV XDG_SEAT=hermes-kms-1\nEND\n' 'ERR input*'
+expect 'a second session registers its own seat' $'START '"$CLIENT_B"$'\nARG /usr/bin/sleep\nARG 600\nENV XDG_SEAT=hermes-kms-2\nEND\n' 'OK hermes-session-02.service'
+expect 'a scoped app cannot cross to another seat' $'START '"$CLIENT_B"$'\nARG /usr/bin/true\nSCOPE wrong\nENV XDG_SEAT=hermes-kms-1\nEND\n' 'ERR input*'
+
+UID_B="$(id -u hermes-s02)"
+INPUT_TEST_ROOT="$(mktemp -d /tmp/hermes-broker-input.XXXXXX)"
+chmod 755 "$INPUT_TEST_ROOT"
+cc -O2 -Wall -Wextra "$REPO/scripts/hermes-uinput-seat-probe.c" -o "$INPUT_TEST_ROOT/probe"
+cc -O2 -Wall -Wextra -Werror "$REPO/scripts/hermes-uhid-seat-probe.c" -o "$INPUT_TEST_ROOT/hid-probe"
+cc -O2 -Wall -Wextra -Werror "$REPO/scripts/hermes-sdl-hotplug-probe.c" \
+	$(pkg-config --cflags --libs sdl2) -o "$INPUT_TEST_ROOT/sdl-probe"
+
+start_sdl_probes() {
+	runuser -u hermes-s01 -- "$INPUT_TEST_ROOT/sdl-probe" \
+		'Hermes broker gamepad hermes-kms-1' 'Hermes broker gamepad hermes-kms-2' >"$INPUT_TEST_ROOT/sdl-a.log" 2>&1 &
+	SDL_A_PID="$!"
+	runuser -u hermes-s02 -- "$INPUT_TEST_ROOT/sdl-probe" \
+		'Hermes broker gamepad hermes-kms-2' 'Hermes broker gamepad hermes-kms-1' >"$INPUT_TEST_ROOT/sdl-b.log" 2>&1 &
+	SDL_B_PID="$!"
+	for _ in $(seq 100); do
+		if grep -qx ready "$INPUT_TEST_ROOT/sdl-a.log" && grep -qx ready "$INPUT_TEST_ROOT/sdl-b.log"; then return; fi
+		sleep 0.02
+	done
+	fail 'SDL probes did not initialize before device creation'
+}
+
+wait_sdl_probes() {
+	if ! wait "$SDL_A_PID" || ! wait "$SDL_B_PID"; then
+		fail 'SDL missed a controller created after initialization' "$(cat "$INPUT_TEST_ROOT/sdl-a.log" "$INPUT_TEST_ROOT/sdl-b.log")"
+	fi
+	SDL_A_PID=""
+	SDL_B_PID=""
+	ok 'running SDL clients discover only their own hotplugged controller'
+}
+
+start_hid_probe() {
+	"$INPUT_TEST_ROOT/hid-probe" >"$INPUT_TEST_ROOT/hid-probe.log" 2>&1 &
+	HID_PROBE_PID="$!"
+	HID_A=""
+	HID_B=""
+	for _ in $(seq 100); do
+		kill -0 "$HID_PROBE_PID" 2>/dev/null || fail 'the UHID probe exited' "$(cat "$INPUT_TEST_ROOT/hid-probe.log")"
+		for node in /sys/class/hidraw/hidraw*; do
+			[ -f "$node/device/uevent" ] || continue
+			if grep -qx 'HID_PHYS=hermes-kms-1' "$node/device/uevent"; then HID_A="/dev/$(basename "$node")"; fi
+			if grep -qx 'HID_PHYS=hermes-kms-2' "$node/device/uevent"; then HID_B="/dev/$(basename "$node")"; fi
+		done
+		[ -n "$HID_A" ] && [ -n "$HID_B" ] && return
+		sleep 0.05
+	done
+	fail 'the kernel did not expose both session hidraw nodes'
+}
+
+start_input_probe() {
+	"$INPUT_TEST_ROOT/probe" >"$INPUT_TEST_ROOT/probe.log" 2>&1 &
+	INPUT_PROBE_PID="$!"
+	for _ in $(seq 100); do
+		[ "$(wc -l <"$INPUT_TEST_ROOT/probe.log")" -ge 2 ] && break
+		kill -0 "$INPUT_PROBE_PID" 2>/dev/null || fail 'the uinput probe exited' "$(cat "$INPUT_TEST_ROOT/probe.log")"
+		sleep 0.02
+	done
+	NODE_A=""
+	NODE_B=""
+	for instance in 1 2; do
+		local sysname node
+		sysname="$(awk -F= -v key="hermes-kms-$instance" '$1 == key {print $2; exit}' "$INPUT_TEST_ROOT/probe.log")"
+		[ -n "$sysname" ] || fail 'the probe did not report both devices'
+		for node in "/sys/class/input/$sysname"/event*; do
+			[ -e "$node" ] || continue
+			if [ "$instance" -eq 1 ]; then NODE_A="/dev/input/$(basename "$node")"; else NODE_B="/dev/input/$(basename "$node")"; fi
+			break
+		done
+	done
+	[ -n "$NODE_A" ] && [ -n "$NODE_B" ] || fail 'the kernel did not create both event nodes'
+}
+
+can_open_input() {
+	runuser -u "$1" -- python3 - "$2" <<-'PY'
+		import os, sys
+		try:
+		    fd = os.open(sys.argv[1], os.O_RDWR | os.O_NONBLOCK)
+		except (PermissionError, FileNotFoundError):
+		    raise SystemExit(1)
+		os.close(fd)
+	PY
+}
+
+wait_input_access() {
+	for _ in $(seq 100); do
+		if can_open_input hermes-s01 "$NODE_A" && can_open_input hermes-s02 "$NODE_B" && \
+		   can_open_input hermes-s01 "$HID_A" && can_open_input hermes-s02 "$HID_B"; then return; fi
+		sleep 0.1
+	done
+	fail 'the broker did not grant the two accounts their own input nodes' "$(journalctl -u hermes-session-broker --no-pager -n 30)"
+}
+
+start_sdl_probes
+start_input_probe
+start_hid_probe
+wait_input_access
+wait_sdl_probes
+! can_open_input hermes-s01 "$NODE_B" || fail 'client A can open client B input'
+! can_open_input hermes-s02 "$NODE_A" || fail 'client B can open client A input'
+! can_open_input hermes-s01 "$HID_B" || fail 'client A can open client B hidraw'
+! can_open_input hermes-s02 "$HID_A" || fail 'client B can open client A hidraw'
+ok 'the broker grants only each account own virtual input nodes'
+
+kill -TERM "$INPUT_PROBE_PID"
+wait "$INPUT_PROBE_PID"
+INPUT_PROBE_PID=""
+kill -TERM "$HID_PROBE_PID"
+wait "$HID_PROBE_PID"
+HID_PROBE_PID=""
+for _ in $(seq 100); do
+	if [ ! -e "$NODE_A" ] && [ ! -e "$NODE_B" ] && [ ! -e "$HID_A" ] && [ ! -e "$HID_B" ]; then break; fi
+	sleep 0.02
+done
+[ ! -e "$HID_A" ] && [ ! -e "$HID_B" ] || fail 'old UHID devices survived producer shutdown'
+start_sdl_probes
+start_input_probe
+start_hid_probe
+wait_input_access
+wait_sdl_probes
+ok 'hotplugged replacement devices receive their account ACLs'
+
+setfacl -x "u:$UID_A" "$NODE_A"
+setfacl -x "u:$UID_A" "$HID_A"
+systemctl restart hermes-session-broker.service
+wait_input_access
+! can_open_input hermes-s01 "$NODE_B" || fail 'a broker restart crossed input seats'
+ok 'persisted leases recover correct access after a broker restart'
 
 # ------------------------------------------------------------------ polkit ---
 systemctl start polkit 2>/dev/null || true
@@ -200,6 +365,11 @@ fi
 
 # ------------------------------------------------------------------- teardown -
 expect 'STOP ends the session' $'STOP '"$CLIENT_A"$'\n' 'OK'
+! can_open_input hermes-s01 "$NODE_A" || fail 'STOP left client A input ACL in place'
+! can_open_input hermes-s01 "$HID_A" || fail 'STOP left client A hidraw ACL in place'
+can_open_input hermes-s02 "$NODE_B" || fail 'STOP revoked another session input ACL'
+can_open_input hermes-s02 "$HID_B" || fail 'STOP revoked another session hidraw ACL'
+ok 'STOP revokes only the stopped session input access'
 [ "$(systemctl show -p ActiveState --value hermes-session-01.service)" != active ] \
 	|| fail 'the session unit survived STOP'
 ok 'the session unit is gone'
@@ -223,6 +393,13 @@ ok 'the account and its home are gone'
 
 expect 'PURGE of an unmapped client fails' $'PURGE '"$CLIENT_A"$'\n' 'ERR notfound*'
 expect 'the freed slot is reused' $'ENSURE '"$CLIENT_A"$'\n' 'OK hermes-s01 * *'
+! can_open_input hermes-s01 "$NODE_A" || fail 'a recreated account inherited stale input access'
+expect 'PURGE stops the second session and revokes its lease' $'PURGE '"$CLIENT_B"$'\n' 'OK'
+if getfacl -cpn "$NODE_B" | grep -q "^user:$UID_B:"; then
+	fail 'PURGE left a named ACL for a deleted account'
+fi
+if getfacl -cpn "$HID_B" | grep -q "^user:$UID_B:"; then fail 'PURGE left a named hidraw ACL'; fi
+ok 'PURGE revokes device access before releasing the account slot'
 
 # ------------------------------------------------------------ damaged state --
 cp "$STATE" "$STATE.bak"

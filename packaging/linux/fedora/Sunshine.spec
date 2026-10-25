@@ -21,6 +21,7 @@ BuildRequires: cmake >= 3.25.0
 BuildRequires: desktop-file-utils
 BuildRequires: libappstream-glib
 BuildRequires: libcap-devel
+BuildRequires: libacl-devel
 BuildRequires: libcurl-devel
 BuildRequires: libdrm-devel
 BuildRequires: libevdev-devel
@@ -75,6 +76,7 @@ BuildRequires: gcc14-c++
 # One entry per library the executable links against. Keep in sync with
 # `objdump -p <binary> | grep NEEDED` and with cmake/packaging/linux.cmake.
 Requires: libcap >= 2.22
+Requires: libacl
 Requires: libcurl >= 7.0
 Requires: libdrm > 2.4.97
 Requires: libevdev >= 1.5.6

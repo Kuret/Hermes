@@ -107,6 +107,11 @@ target_link_libraries(${PROJECT_NAME}
         ${SUNSHINE_EXTERNAL_LIBRARIES}
         gtest
         ${PLATFORM_LIBRARIES})
+if(TARGET hermes-session-input)
+    target_link_libraries(${PROJECT_NAME} hermes-session-input)
+    target_include_directories(${PROJECT_NAME} PRIVATE "${HERMES_ACL_INCLUDE_DIR}")
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HERMES_TEST_SESSION_INPUT=1)
+endif()
 target_compile_definitions(${PROJECT_NAME} PUBLIC ${SUNSHINE_DEFINITIONS} ${TEST_DEFINITIONS})
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     pkg_check_modules(HERMES_TEST_SDL2 QUIET IMPORTED_TARGET sdl2>=2.24)

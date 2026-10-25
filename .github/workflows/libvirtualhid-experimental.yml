@@ -18,6 +18,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  broker:
+    name: Session accounts and automatic input ACLs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install broker dependencies and virtual input module
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-13 libacl1-dev acl libsdl2-dev pkg-config
+          extra_modules="linux-modules-extra-$(uname -r)"
+          if apt-cache show "$extra_modules" >/dev/null 2>&1; then
+            sudo apt-get install -y --no-install-recommends "$extra_modules"
+          fi
+          sudo modprobe uinput
+          sudo modprobe uhid
+          test -c /dev/uinput
+          test -c /dev/uhid
+      - name: Compile the privileged broker independently of the streaming host
+        run: |
+          mkdir -p build
+          g++-13 -std=c++20 -O2 -Wall -Wextra -Werror \
+            tools/hermes-session-broker.cpp tools/session-broker-input.cpp \
+            -lacl -o build/hermes-session-broker
+      - name: Test real accounts, hotplug, restart and per-seat revocation
+        run: |
+          sudo udevadm verify src_assets/linux/misc/99-hermes-session-input.rules
+          sudo scripts/session-broker-test.sh "$PWD/build/hermes-session-broker"
+      - name: Broker journal
+        if: always()
+        run: sudo journalctl -u hermes-session-broker --no-pager -n 120
+
   linux:
     runs-on: ubuntu-latest
     container:
@@ -59,7 +91,7 @@ jobs:
 
       - name: Test Hermes input translation and per-client feedback
         working-directory: build/tests
-        run: ./test_sunshine --gtest_color=yes --gtest_filter='VirtualHidInputTest.*:SessionBrokerLockTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*'
+        run: ./test_sunshine --gtest_color=yes --gtest_filter='VirtualHidInputTest.*:SessionBrokerLockTest.*:SessionInputAccessTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*'
 
       - name: Configure pinned libvirtualhid tests
         run: |
@@ -136,11 +168,21 @@ jobs:
             archlinux:latest bash -euo pipefail -c '
               pacman -Syu --noconfirm
               pacman -S --noconfirm --needed base-devel ffmpeg openssl opus libdrm \
-                wayland libx11 libxrandr libxfixes libxcb libva libvdpau libcap \
+                wayland libx11 libxrandr libxfixes libxcb libxi libxtst libxss \
+                libxcursor libxkbcommon libva libvdpau libcap \
                 curl libevdev libinput sdl2 systemd miniupnpc libpulse qt6-base \
                 qt6-svg icu numactl acl util-linux kmod
               chmod +x build/tests/test_sunshine build/tests/hermes-hid-consumer \
                 cmake-build-libvirtualhid-tests/tests/test_libvirtualhid
+              for binary in build/tests/test_sunshine build/tests/hermes-hid-consumer \
+                cmake-build-libvirtualhid-tests/tests/test_libvirtualhid; do
+                hermes_dependencies=$(ldd "$binary")
+                if grep -q "not found" <<< "$hermes_dependencies"; then
+                  echo "Missing runtime dependencies for $binary:"
+                  echo "$hermes_dependencies"
+                  exit 1
+                fi
+              done
               /usr/lib/systemd/systemd-udevd --daemon
               scripts/vm-isolated-input-test.sh "$PWD/build/tests/test_sunshine"
               cmake-build-libvirtualhid-tests/tests/test_libvirtualhid \

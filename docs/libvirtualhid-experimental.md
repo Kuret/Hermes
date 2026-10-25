@@ -8,7 +8,7 @@ compiled or linked.
 
 The dependency is our fork,
 [MrOz59/libvirtualhid](https://github.com/MrOz59/libvirtualhid), pinned by CMake
-to commit `923531ab41d440a2b564f596c191b476f226598e`. Updating the dependency
+to commit `14ee6c4717d32b678c2983bfa6c54019b944d421`. Updating the dependency
 requires reviewing and intentionally changing that SHA.
 
 The library uses C++23, Linux `uinput`/`uhid`, and libevdev. Hermes needs read
@@ -86,6 +86,52 @@ MAC rather than the formerly fixed protocol MAC.
 
 Session teardown destroys only that session's runtime and kernel handles. The
 shared desktop continues to use an input object with an empty session tag.
+
+## Input access for broker-created accounts
+
+The broker registers the compositor's `XDG_SEAT` together with the paired
+client, mapped account and current UID. It persists that lease in the private
+`/var/lib/hermes/session-users.map.input` file before granting any access.
+Scoped applications inherit that seat and cannot replace it. The request
+protocol accepts neither device paths nor UIDs for ACL operations.
+
+The broker discovers virtual `event`, `js` and `hidraw` nodes for that exact
+seat. It requires matching sysfs ancestry and `/sys/dev/char` identity, opens
+the node without following symlinks, verifies its character-device number and
+sysfs identity again, and edits the ACL by descriptor. It grants only the
+session UID read/write access, preserving other ACL entries' effective rights.
+A name reused by a different device is never sufficient authorization.
+
+The packaged `99-hermes-session-input.rules` invokes a root-only helper after
+the distribution uaccess rules and before udev publishes a new device. This
+ensures already-running SDL/libinput consumers can open it on the first add
+event. The helper accepts only a numbered kernel node name and uses a short
+ACL lock, so another session stopping does not hold up its hotplug.
+
+Input reconciliation also runs approximately every 500 ms to retry missed
+updates and recover after restart, without a new request from Hermes.
+Persisted leases survive a broker restart. An isolated session
+started by an older broker needs to be restarted once to register its lease.
+
+STOP, PURGE, failed initial launches and completed sessions stop the managed
+session/app units and user manager before removing the named device ACLs.
+A failed cleanup retains the lease for retry and prevents PURGE from releasing
+an account with outstanding access. ACL changes cannot invalidate existing
+open descriptors, which is why process shutdown comes first.
+
+The native broker build requires `libacl` headers and library (`libacl1-dev`
+on Debian/Ubuntu, `acl` on Arch). Packages include the runtime dependency;
+the Flatpak build also includes its attr/acl build dependencies. Device ACLs
+do not bypass a container's device filter: native HID profiles still require
+the container to expose their own hidraw nodes.
+
+Run `scripts/session-broker-test.sh /path/to/hermes-session-broker` as root
+**only in a disposable VM with systemd, udev, uinput, uhid and ACL tools**.
+It installs the packaged broker and creates real accounts. The test verifies
+both event and hidraw access for two UIDs, cross-seat denial, SDL consumers
+started before device creation, replacement devices, persisted leases after
+restart, STOP and PURGE. This is separate from
+pure identity/ACL tests, which touch only temporary fixtures.
 
 ## Building
 
