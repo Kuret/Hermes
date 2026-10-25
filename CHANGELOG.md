@@ -60,6 +60,30 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   SDDM and Hermes-KMS only.
 
 ### Changed
+- Experimental isolated application sessions hand Gamescope the session's own
+  Hermes-KMS card to scan out on ([#57]). Upstream Gamescope scans out on the
+  GPU it renders with - the host's - so Hermes now asks `gamescope --help`
+  which option the build takes (`--prefer-drm` from
+  ValveSoftware/gamescope#2220, or a downstream `--drm-device`), passes the
+  card with it and in `GAMESCOPE_PREFER_DRM`, and refuses to start a build
+  that takes neither instead of letting it open the host's display.
+  `HERMES_ISOLATED_GAMESCOPE_DRM_FLAG` forces an option (or `none`) for a
+  build whose usage text does not list it; the process-wide
+  `HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE` is no longer read, since every
+  session has a card of its own. Gamescope also starts with
+  `WLR_LIBINPUT_NO_DEVICES=1`, because the session seat has no devices until
+  the stream starts.
+- Applications gain two settings for isolated sessions: Gamescope Steam mode
+  (`gamescope-steam-mode`), which adds `-e` and a second Xwayland server for
+  `steam -gamepadui`, replacing the process-wide
+  `HERMES_ISOLATED_GAMESCOPE_STEAM_MODE` switch (still honoured as an
+  override); and `first-frame-timeout`, how long the session has to show its
+  first frame. The default for application sessions rises from 5 to 30
+  seconds, since Steam's gamepad UI regularly took longer and failed a launch
+  that was only slow ([#57]).
+- An isolated stream no longer nudges the mouse when it starts. The nudge
+  wakes damage-based capture, which an isolated session does not use, and in
+  Gamescope it put a cursor in the middle of Steam's gamepad UI ([#57]).
 - Linux gamepad backend policy is now configurable. Auto keeps Xbox controllers
   on uinput for ordinary rumble without hidraw access; native HID remains an
   explicit option for trigger rumble and battery. PlayStation/Switch retain
@@ -91,6 +115,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Resuming an isolated session took the host's audio ([#57]). The stream
+  looked the session's sink up by its own launch id rather than the one the
+  session was started with, found nothing, and took the host path, which
+  moves the host's default sink onto the stream's virtual sink. A resumed
+  stream now captures the session's sink, as the first one did.
 - The libvirtualhid integration workflow separates pure unit checks from a
   kernel-device job, which also exercises an unprivileged SDL consumer with
   per-device ACLs and rejects access to another seat's gamepad.
@@ -1760,6 +1789,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#43]: https://github.com/MrOz59/Hermes/issues/43
 [#50]: https://github.com/MrOz59/Hermes/issues/50
 [#52]: https://github.com/MrOz59/Hermes/issues/52
+[#57]: https://github.com/MrOz59/Hermes/issues/57
 [#58]: https://github.com/MrOz59/Hermes/pull/58
 [#61]: https://github.com/MrOz59/Hermes/issues/61
 

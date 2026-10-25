@@ -367,6 +367,29 @@ one packaged `hermes-kms-seatd@N.service` for every configured Hermes-KMS
 device; Hermes assigns the corresponding private broker socket to the
 compositor automatically.
 
+Two more fields apply only to isolated sessions:
+
+- `gamescope-steam-mode` (`false` by default): for the `application` profile,
+  run Gamescope with `-e` and a second Xwayland server, which
+  `steam -gamepadui` and the Steam overlay need;
+- `first-frame-timeout` (seconds, `0` by default): how long the session has to
+  show its first frame before the launch fails. `0` means 30 seconds for the
+  `application` profile and 5 for `desktop`.
+
+The `application` profile needs a Gamescope that can scan out on a different
+device than it renders with; see
+[experimental-isolated-gamescope.md](experimental-isolated-gamescope.md).
+
+```json
+{
+  "name": "Steam Big Picture",
+  "cmd": "steam -gamepadui",
+  "session-type": "application",
+  "gamescope-steam-mode": true,
+  "first-frame-timeout": 45
+}
+```
+
 #### Linux (Flatpak)
 
 > [!CAUTION]
