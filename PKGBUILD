@@ -49,8 +49,11 @@ optdepends=(
   'hermes-kms: zero-copy Hermes virtual displays and independent DRM devices'
   'kscreen: KDE Plasma Wayland virtual-display activation'
   'libva-mesa-driver: AMD GPU encoding support'
+  'pipewire: private audio server per independent client session'
+  'pipewire-pulse: PulseAudio clients in independent client sessions'
   'seatd: private seat brokers for experimental independent client sessions'
   'weston: experimental independent desktop client sessions'
+  'wireplumber: links streams in the private audio server of independent client sessions'
   'wl-clipboard: Hermes text clipboard synchronization on Wayland'
   'xclip: Hermes text clipboard synchronization on X11'
 )
