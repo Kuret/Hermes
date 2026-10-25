@@ -108,7 +108,7 @@ ensures already-running SDL/libinput consumers can open it on the first add
 event. The helper accepts only a numbered kernel node name and uses a short
 ACL lock, so another session stopping does not hold up its hotplug.
 
-Input reconciliation also runs approximately every 500 ms to retry missed
+Input reconciliation also runs approximately every two seconds to retry missed
 updates and recover after restart, without a new request from Hermes.
 Persisted leases survive a broker restart. An isolated session
 started by an older broker needs to be restarted once to register its lease.
@@ -118,6 +118,17 @@ session/app units and user manager before removing the named device ACLs.
 A failed cleanup retains the lease for retry and prevents PURGE from releasing
 an account with outstanding access. ACL changes cannot invalidate existing
 open descriptors, which is why process shutdown comes first.
+
+The accept loop delegates work to at most 64 child processes. Account/lifetime
+mutations remain serialized by the same validated file lock, while read-only
+requests can finish during slow account creation or systemd shutdown. Lock
+contention queues for up to two minutes; unsafe locks fail immediately. The
+client gives mutations a total three-minute budget and read-only queries 15
+seconds. Status replies come from systemd rather than a stale process-local
+cache. An unavailable or malformed liveness reply does not by itself stop an
+existing stream; teardown requires a confirmed inactive or unmapped session.
+Nonblocking connect, send and receive operations share one deadline, including
+a full Unix listen queue, and incomplete replies are refused.
 
 The native broker build requires `libacl` headers and library (`libacl1-dev`
 on Debian/Ubuntu, `acl` on Arch). Packages include the runtime dependency;
@@ -132,6 +143,10 @@ both event and hidraw access for two UIDs, cross-seat denial, SDL consumers
 started before device creation, replacement devices, persisted leases after
 restart, STOP and PURGE. This is separate from
 pure identity/ACL tests, which touch only temporary fixtures.
+`python3 scripts/session-broker-concurrency-test.py /path/to/hermes-session-broker`
+also runs the actual daemon with a private socket/map/allow-file. It creates no
+accounts or devices and requires no systemd; it verifies incomplete requests,
+queued mutations and immediate refusal of unsafe locks.
 
 ## Building
 

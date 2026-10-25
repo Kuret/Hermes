@@ -35,10 +35,14 @@ namespace {
       ASSERT_TRUE(first);
       hermes::session_broker::mutation_lock competing {path.c_str()};
       EXPECT_FALSE(competing);
+      EXPECT_TRUE(competing.contended());
     }
     hermes::session_broker::mutation_lock retry {path.c_str()};
     EXPECT_TRUE(retry);
+    EXPECT_FALSE(retry.contended());
+
     struct stat info {};
+
     ASSERT_EQ(::stat(path.c_str(), &info), 0);
     EXPECT_EQ(info.st_mode & 0777U, 0600U);
   }
@@ -46,6 +50,7 @@ namespace {
   TEST_F(SessionBrokerLockTest, RefusesMissingParentAndDirectory) {
     hermes::session_broker::mutation_lock missing {(root / "missing" / "lock").c_str()};
     EXPECT_FALSE(missing);
+    EXPECT_FALSE(missing.contended());
     hermes::session_broker::mutation_lock directory {root.c_str()};
     EXPECT_FALSE(directory);
   }
@@ -76,6 +81,7 @@ namespace {
       ASSERT_EQ(::chmod(path.c_str(), mode), 0);
       hermes::session_broker::mutation_lock unsafe {path.c_str()};
       EXPECT_FALSE(unsafe);
+      EXPECT_FALSE(unsafe.contended());
     }
   }
 

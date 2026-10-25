@@ -52,6 +52,7 @@ file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/tests/*.h
         ${CMAKE_SOURCE_DIR}/tests/*.cpp)
 list(REMOVE_ITEM TEST_SOURCES "${CMAKE_SOURCE_DIR}/tests/consumers/linux_hid_rumble.cpp")
+list(REMOVE_ITEM TEST_SOURCES "${CMAKE_SOURCE_DIR}/tests/consumers/linux_session_broker_test_logging.cpp")
 
 set(SUNSHINE_SOURCES
         ${SUNSHINE_TARGET_FILES})

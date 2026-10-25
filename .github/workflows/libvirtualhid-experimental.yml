@@ -73,7 +73,7 @@ jobs:
       - name: Install broker dependencies and virtual input module
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends g++-13 libacl1-dev acl libsdl2-dev pkg-config
+          sudo apt-get install -y --no-install-recommends g++-13 libacl1-dev acl libsdl2-dev pkg-config libboost-log-dev libgtest-dev
           extra_modules="linux-modules-extra-$(uname -r)"
           if apt-cache show "$extra_modules" >/dev/null 2>&1; then
             sudo apt-get install -y --no-install-recommends "$extra_modules"
@@ -88,8 +88,26 @@ jobs:
           g++-13 -std=c++20 -O2 -Wall -Wextra -Werror \
             tools/hermes-session-broker.cpp tools/session-broker-input.cpp \
             -lacl -o build/hermes-session-broker
+      - name: Compile and test broker RPCs, worker bounds and ACLs independently
+        env:
+          HERMES_TEST_REQUIRE_UNIX_SOCKETS: "1"
+        run: |
+          g++-13 -std=c++23 -O0 -Wall -Wextra -Werror \
+            -DBOOST_LOG_DYN_LINK -DHERMES_TEST_SESSION_INPUT=1 -I . \
+            tests/consumers/linux_session_broker_test_logging.cpp \
+            src/platform/linux/session_broker.cpp src/platform/linux/session_broker_transport.cpp \
+            tools/session-broker-input.cpp \
+            tests/unit/platform/test_session_broker_client.cpp \
+            tests/unit/platform/test_session_broker_workers.cpp \
+            tests/unit/platform/test_session_broker_lock.cpp \
+            tests/unit/platform/test_session_input_access.cpp \
+            -lgtest_main -lgtest -lboost_log -lboost_thread -lboost_filesystem \
+            -lboost_regex -lboost_chrono -lboost_atomic -lacl -pthread \
+            -o build/hermes-session-broker-tests
+          build/hermes-session-broker-tests --gtest_color=yes
       - name: Test real accounts, hotplug, restart and per-seat revocation
         run: |
+          python3 scripts/session-broker-concurrency-test.py "$PWD/build/hermes-session-broker"
           sudo udevadm verify src_assets/linux/misc/99-hermes-session-input.rules
           sudo scripts/session-broker-test.sh "$PWD/build/hermes-session-broker"
       - name: Broker journal
@@ -139,7 +157,9 @@ jobs:
 
       - name: Test Hermes input translation and per-client feedback
         working-directory: build/tests
-        run: ./test_sunshine --gtest_color=yes --gtest_filter='VirtualHidInputTest.*:SessionBrokerLockTest.*:SessionInputAccessTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*'
+        env:
+          HERMES_TEST_REQUIRE_UNIX_SOCKETS: "1"
+        run: ./test_sunshine --gtest_color=yes --gtest_filter='VirtualHidInputTest.*:SessionBrokerLockTest.*:SessionBrokerWorkersTest.*:SessionBrokerClientTest.*:SessionBrokerPolicyTest.*:SessionInputAccessTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*'
 
       - name: Configure pinned libvirtualhid tests
         run: |

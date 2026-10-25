@@ -182,7 +182,9 @@ list(APPEND PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/linux/card_broker.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/card_broker.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/session_broker.h"
-        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_broker.cpp")
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_broker.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_broker_transport.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_broker_transport.cpp")
 
 # evdev
 include(dependencies/libevdev_Sunshine)

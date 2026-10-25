@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <cerrno>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -14,8 +15,8 @@ namespace hermes::session_broker {
    * @brief Own an exclusive, nonblocking lock on a trusted regular file.
    *
    * Symlinks, hard links, foreign ownership and writable group/other access
-   * are refused. Contention fails immediately so a second broker cannot hang
-   * its serial request loop behind a different process.
+   * are refused. Contention fails immediately; callers may retry contention
+   * with a deadline, but must never retry an unsafe or inaccessible lock.
    */
   class mutation_lock {
   public:
@@ -25,8 +26,15 @@ namespace hermes::session_broker {
       if (candidate < 0) {
         return;
       }
+
       struct stat info {};
-      if (::fstat(candidate, &info) != 0 || !S_ISREG(info.st_mode) || info.st_uid != ::geteuid() || info.st_nlink != 1 || (info.st_mode & (S_IWGRP | S_IWOTH)) != 0 || ::flock(candidate, LOCK_EX | LOCK_NB) != 0) {
+
+      if (::fstat(candidate, &info) != 0 || !S_ISREG(info.st_mode) || info.st_uid != ::geteuid() || info.st_nlink != 1 || (info.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+        ::close(candidate);
+        return;
+      }
+      if (::flock(candidate, LOCK_EX | LOCK_NB) != 0) {
+        contended_ = errno == EWOULDBLOCK || errno == EAGAIN;
         ::close(candidate);
         return;
       }
@@ -47,7 +55,13 @@ namespace hermes::session_broker {
       return fd_ >= 0;
     }
 
+    /** @return True only for contention on an otherwise validated lock file. */
+    bool contended() const {
+      return contended_;
+    }
+
   private:
     int fd_ = -1;
+    bool contended_ = false;
   };
 }  // namespace hermes::session_broker

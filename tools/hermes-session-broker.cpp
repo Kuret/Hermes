@@ -78,6 +78,7 @@
 
 #include "session-broker-input.h"
 #include "session-broker-lock.h"
+#include "session-broker-workers.h"
 
 #include <algorithm>
 #include <array>
@@ -103,7 +104,6 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -126,47 +126,9 @@ namespace {
 
   constexpr int SD_LISTEN_FDS_START = 3;
 
-  // How long one connection may take over its socket. The broker accepts
-  // serially, so a client that connects and says nothing stalls every client
-  // behind it; this deadline is what turns that stall from forever into a
-  // bounded wait. It covers reads and writes alike, and a full request has to
-  // arrive within it - the ceiling below bounds size, this bounds time.
+  // Bound each worker's socket reads and writes. Slow peers occupy a worker,
+  // never the accept loop; the worker pool also bounds their total count.
   constexpr auto socket_timeout = std::chrono::seconds(10);
-
-  // STATUS asks systemd for a unit's state, which is a fork and exec of
-  // `systemctl show`. Callers poll it - the Game Mode console every couple of
-  // seconds, the streaming host while a session is alive - so the answer is
-  // cached briefly. A state is stale after this long at worst, which no caller
-  // can distinguish from a poll that has not happened yet.
-  constexpr auto status_cache_ttl = std::chrono::seconds(2);
-
-  struct status_cache_t {
-    struct entry_t {
-      std::chrono::steady_clock::time_point expires_at;
-      std::string state;
-    };
-
-    // The broker serves one connection at a time, so no lock is needed.
-    std::unordered_map<std::string, entry_t> entries;
-
-    std::optional<std::string> find(const std::string &unit) {
-      const auto it = entries.find(unit);
-      if (it == entries.end()) {
-        return std::nullopt;
-      }
-      if (std::chrono::steady_clock::now() >= it->second.expires_at) {
-        entries.erase(it);
-        return std::nullopt;
-      }
-      return it->second.state;
-    }
-
-    void store(const std::string &unit, std::string state) {
-      entries[unit] = {std::chrono::steady_clock::now() + status_cache_ttl, std::move(state)};
-    }
-  };
-
-  status_cache_t status_cache;
 
   /**
    * @brief Wait until `fd` is ready for `events` or the deadline passes.
@@ -867,9 +829,6 @@ namespace {
       }
       return "ERR provision systemd-run refused to start the session";
     }
-    // The unit is coming up; a STATUS right behind this START must not be
-    // answered from a cache entry that still remembers it as gone.
-    status_cache.store(session_unit, "activating");
     return "OK " + unit;
   }
 
@@ -895,27 +854,23 @@ namespace {
 
     const auto unit = unit_for_account(existing->account);
 
-    // STATUS is polled - the Game Mode console every couple of seconds, the
-    // streaming host while a session is alive - and each answer otherwise
-    // costs a fork and exec of `systemctl show`. The state is cached briefly:
-    // nothing systemd knows changes between two polls that close together.
+    // Workers do not share a process-local status cache. Query systemd so
+    // one worker cannot report an old inactive state after another START.
     std::string state;
-    if (const auto cached = status_cache.find(unit); cached) {
-      state = *cached;
-    } else {
-      const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
-      if (systemctl.empty()) {
-        return "ERR provision systemctl was not found";
-      }
-      if (!run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state)) {
-        return "ERR provision the session unit's state could not be read";
-      }
-      state = trim(state);
-      status_cache.store(unit, state);
+    const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
+    if (systemctl.empty()) {
+      return "ERR provision systemctl was not found";
+    }
+    if (!run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state)) {
+      return "ERR provision the session unit's state could not be read";
+    }
+    state = trim(state);
+    if (state.empty()) {
+      return "ERR provision the session unit's state was empty";
     }
     // systemd answers `inactive` for a unit it has never heard of, which is
     // the right answer to this question: nothing of that name is running.
-    return "OK " + (state.empty() ? std::string {"inactive"} : state) + ' ' + unit;
+    return "OK " + state + ' ' + unit;
   }
 
   /**
@@ -1003,16 +958,15 @@ namespace {
       return "the session unit state could not be determined";
     }
     state = trim(state);
+    if (state.empty()) {
+      return "the session unit's state was empty; input access was not revoked";
+    }
     if (!state.empty() && state != "inactive" && state != "failed") {
       if (!run({systemctl, "stop", unit})) {
         return "the session unit could not be stopped";
       }
       state = "inactive";
     }
-    // The state the unit is now in is the state a STATUS behind this STOP
-    // must report, not whatever a cache entry from before the stop remembers.
-    status_cache.store(unit, state.empty() ? "inactive" : state);
-
     // Lingering is what START turned on to get the account a runtime directory
     // and a user manager, and it survives reboots. Left on, every client that
     // ever streamed would keep a manager and a session bus running on the host
@@ -1079,21 +1033,22 @@ namespace {
         return entry.client_id == owner.client && entry.account == owner.account;
       });
       const auto unit = unit_for_account(owner.account);
-      auto state = status_cache.find(unit);
-      if (!state) {
-        std::string observed;
-        if (!run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, observed)) {
-          remember("cannot determine a leased session's state; its input access was not changed");
-          continue;
-        }
-        state = trim(observed);
-        status_cache.store(unit, *state);
+      std::string state;
+      if (!run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state)) {
+        remember("cannot determine a leased session's state; its input access was not changed");
+        continue;
       }
-      const bool live = *state == "active" || *state == "activating" || *state == "reloading";
-      if (!mapped || !live) {
+      state = trim(state);
+      const bool live = state == "active" || state == "activating" || state == "reloading";
+      const bool stopped = state == "inactive" || state == "failed" || state == "deactivating";
+      if (!mapped || stopped) {
         if (const auto failure = stop_session(options, owner.account); failure) {
           remember(*failure);
         }
+        continue;
+      }
+      if (!live) {
+        remember("the leased session's state is unknown; its input access was not changed");
         continue;
       }
       hermes::session_broker::mutation_lock lock {(options.lock_file + ".input").c_str()};
@@ -1383,7 +1338,10 @@ namespace {
         std::fprintf(stderr, "a connection sent no complete request within %lld seconds; dropping it\n", static_cast<long long>(socket_timeout.count()));
         return std::nullopt;
       }
-      const auto count = ::read(fd, chunk.data(), chunk.size());
+      const auto count = ::read(fd, chunk.data(), std::min(chunk.size(), request_ceiling - buffer.size()));
+      if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+        continue;
+      }
       if (count <= 0) {
         break;
       }
@@ -1429,6 +1387,9 @@ namespace {
         return;
       }
       const auto count = ::write(fd, line.data() + offset, line.size() - offset);
+      if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+        continue;
+      }
       if (count <= 0) {
         return;
       }
@@ -1473,10 +1434,18 @@ namespace {
     // process), which is why it is a file rather than a local variable.
     std::optional<hermes::session_broker::mutation_lock> lock;
     if (request_mutates(*request)) {
-      lock.emplace(options.lock_file.c_str());
-      if (!*lock) {
-        write_reply(connection, "ERR busy the broker mutation lock is unavailable or unsafe; no changes were made");
-        return;
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+      for (;;) {
+        lock.emplace(options.lock_file.c_str());
+        if (*lock) {
+          break;
+        }
+        if (!lock->contended() || std::chrono::steady_clock::now() >= deadline) {
+          write_reply(connection, "ERR busy the broker mutation lock is unavailable, unsafe or timed out; no changes were made");
+          return;
+        }
+        lock.reset();
+        ::usleep(20000);
       }
     }
     const auto reply = handle_request(options, *request);
@@ -1561,21 +1530,30 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   keep_from_children(listener);
+  // Workers must remain waitable until their owning pool reaps them.
+  ::signal(SIGCHLD, SIG_DFL);
+  const int listener_flags = ::fcntl(listener, F_GETFL, 0);
+  if (listener_flags < 0 || ::fcntl(listener, F_SETFL, listener_flags | O_NONBLOCK) != 0) {
+    std::fputs("cannot make the broker listener nonblocking\n", stderr);
+    return 1;
+  }
 
+  hermes::session_broker::worker_pool workers {64};
+  pid_t reconciliation = -1;
   auto next_input_refresh = std::chrono::steady_clock::now();
-  std::string last_input_failure;
   for (;;) {
+    workers.reap();
     const auto now = std::chrono::steady_clock::now();
-    if (now >= next_input_refresh) {
-      hermes::session_broker::mutation_lock lock {options.lock_file.c_str()};
-      if (lock) {
-        const auto failure = refresh_input_access(options);
-        if (failure && *failure != last_input_failure) {
-          std::fprintf(stderr, "input access reconciliation: %s\n", failure->c_str());
+    if (now >= next_input_refresh && !workers.contains(reconciliation)) {
+      reconciliation = workers.spawn({listener}, [&]() {
+        hermes::session_broker::mutation_lock lock {options.lock_file.c_str()};
+        if (lock) {
+          if (const auto failure = refresh_input_access(options); failure) {
+            std::fprintf(stderr, "input access reconciliation: %s\n", failure->c_str());
+          }
         }
-        last_input_failure = failure.value_or("");
-      }
-      next_input_refresh = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+      });
+      next_input_refresh = now + std::chrono::seconds(2);
     }
     pollfd ready {listener, POLLIN, 0};
     const int available = ::poll(&ready, 1, 500);
@@ -1586,16 +1564,20 @@ int main(int argc, char *argv[]) {
       }
       continue;
     }
-    const int connection = ::accept(listener, nullptr, nullptr);
+    const int connection = ::accept4(listener, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
     if (connection < 0) {
-      if (errno == EINTR) {
+      if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
         continue;
       }
       std::fprintf(stderr, "accept failed: %s\n", std::strerror(errno));
       return 1;
     }
-    keep_from_children(connection);
-    serve(options, connection);
+    if (workers.spawn({listener}, [&]() {
+          serve(options, connection);
+        }) < 0) {
+      constexpr std::string_view busy {"ERR busy the broker worker limit was reached; retry later\n"};
+      ::send(connection, busy.data(), busy.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
+    }
     ::close(connection);
   }
 }

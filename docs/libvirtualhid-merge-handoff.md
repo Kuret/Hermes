@@ -4,7 +4,35 @@ Checkpoint atualizado em 25/10/2026, Australia/Sydney, após a continuação e
 validação das branches experimentais. **Não fazer merge na
 main do Hermes nem alterar Hermes-KMS nesta retomada sem nova autorização.**
 
-## Continuação: ACLs automáticas e cache transacional
+## Continuação: inicialização e liveness do broker
+
+Esta rodada mantém o pin da biblioteca em `14ee6c4` e corrige uma falha antes
+da validação com clientes reais: ENSURE podia demorar mais que os 15 s do
+cliente e bloquear STATUS de outras sessões. Uma falha de RPC era interpretada
+como sessão encerrada, derrubando streams durante o provisionamento de outro
+cliente ou um reinício do broker.
+
+- O daemon aceita conexões sem bloquear e delega pedidos e reconciliação a
+  até 64 workers, reaped individualmente. Mutações continuam sob o mesmo lock
+  validado; contenção pode esperar até dois minutos, arquivo inseguro falha
+  imediatamente. Cada worker fecha o listener antes de executar comandos.
+- O cliente usa I/O não bloqueante e um prazo único para connect/send/receive,
+  inclusive backlog Unix cheio. Mutações têm 180 s; consultas continuam em 15 s.
+  Respostas incompletas e UIDs parcialmente numéricos são recusados.
+- `query_active` distingue ativo, inativo e indisponível. O monitor do stream
+  mantém a sessão quando não há confirmação de parada. O daemon consulta o
+  estado atual do systemd, sem copiar cache obsoleto entre workers.
+- A reconciliação periódica passa de 500 ms para 2 s; o hotplug síncrono via
+  udev continua imediato. A CI passa a compilar/testar o cliente RPC e o pool
+  separadamente do host e exercita o daemon real com mapa/socket privados,
+  sem criar contas nem dispositivos, antes dos testes com systemd.
+
+Compilação local com warnings-as-errors e testes de processos/lock aprovados.
+Este ambiente nega sockets AF_UNIX, por isso os testes de IPC devem passar
+obrigatoriamente no job do broker (sem permitir skip na CI). Os resultados de
+CI abaixo comprovam o checkpoint anterior; esta rodada precisa de nova CI.
+
+## Checkpoint anterior: ACLs automáticas e cache transacional
 
 O lote atual implementa a tarefa de ACLs abaixo, anteriormente pendente. O
 Hermes fixa `14ee6c4717d32b678c2983bfa6c54019b944d421` da feature branch do
