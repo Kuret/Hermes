@@ -60,6 +60,22 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   SDDM and Hermes-KMS only.
 
 ### Changed
+- Linux gamepad backend policy is now configurable. Auto keeps Xbox controllers
+  on uinput for ordinary rumble without hidraw access; native HID remains an
+  explicit option for trigger rumble and battery. PlayStation/Switch retain
+  native HID, and input-events-only Auto emulates Xbox Series.
+- Linux controller selection now offers all seven libvirtualhid profiles.
+  Automatic Xbox/unknown-controller selection uses Xbox Series; explicit
+  `xone` remains available. PlayStation MAC policy is now named
+  `virtualhid_randomize_mac`, with both former DS5-specific keys accepted.
+- Linux virtual input now uses the pinned MrOz59/libvirtualhid fork for the
+  complete stack: keyboard, relative and absolute mouse, high-resolution
+  scrolling, Xbox One/Switch Pro/DualSense controllers and their feedback,
+  multitouch, and pen/tablet input. The Inputtino submodule and adapter were
+  removed. Private Hermes-KMS sessions keep independent runtimes and physical
+  identities; udev now propagates a UHID controller's `hermes-kms-N` identity
+  to its event, joystick and hidraw children so controllers remain on the same
+  isolated seat as that session's keyboard, mouse, touch and pen devices.
 - A session that asks for a virtual display now fails to start when that
   display cannot be set up, instead of streaming a physical monitor ([#58]).
   This holds for every way of asking for one (the application's
@@ -75,6 +91,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- The libvirtualhid integration workflow separates pure unit checks from a
+  kernel-device job, which also exercises an unprivileged SDL consumer with
+  per-device ACLs and rejects access to another seat's gamepad.
+- Linux pen/touch capability advertisement and native packet handling now
+  respect input policy and backend availability. Stream cleanup releases
+  remapped keys, the fifth mouse button, controller input and active pen/touch
+  state only on the owning context. Startup controller probing now passes
+  the owning input handle rather than casting the backend payload.
 - Hermes opens Hermes-KMS control/capture render nodes with `O_RDONLY`. Updated
   Hermes-KMS udev policy grants the active or configured consumer read-only
   access, which still permits every private capture ioctl and exported fd but

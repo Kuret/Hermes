@@ -11,6 +11,7 @@ license=('GPL-3.0-only')
 install=hermes.install
 
 depends=(
+  'acl'
   'avahi'
   'curl'
   'libcap'

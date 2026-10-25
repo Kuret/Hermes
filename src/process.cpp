@@ -631,7 +631,9 @@ namespace proc {
       // child of this process, so there is no handle here to ask and systemd is
       // the only thing that knows.
       if (!runtime->unit.empty()) {
-        return platf::session_broker::active(runtime->client_uuid);
+        // A broker restart or slow account operation is not evidence that
+        // this session exited. Tear down only after a confirmed inactive reply.
+        return platf::session_broker::query_active(runtime->client_uuid).value_or(true);
       }
       return runtime->process.valid() && runtime->process.running();
     }

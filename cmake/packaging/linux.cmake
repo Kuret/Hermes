@@ -57,6 +57,7 @@ install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/session-compositors/
 
 if(${SUNSHINE_BUILD_APPIMAGE} OR ${SUNSHINE_BUILD_FLATPAK})
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.rules"
+            "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/99-hermes-session-input.rules"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/udev/rules.d")
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.conf"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/modules-load.d")
@@ -82,6 +83,7 @@ else()
 
     if(UDEV_FOUND)
         install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.rules"
+                "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/99-hermes-session-input.rules"
                 DESTINATION "${UDEV_RULES_INSTALL_DIR}")
     endif()
     # polkit has no pkg-config variable for its rules directory; unlike the
@@ -198,6 +200,11 @@ endif()
 
 # This should automatically figure out dependencies, doesn't work with the current config
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+
+if(SUNSHINE_BUILD_SESSION_BROKER)
+    string(APPEND CPACK_DEBIAN_PACKAGE_DEPENDS ", libacl1")
+    string(APPEND CPACK_RPM_PACKAGE_REQUIRES ", libacl")
+endif()
 
 # application icon
 # Installed as hermes.svg rather than apollo.svg so the package does not claim a

@@ -207,10 +207,11 @@ namespace config {
     std::chrono::duration<double> key_repeat_period;
 
     std::string gamepad;
+    std::string linux_gamepad_backend;
     bool ds4_back_as_touchpad_click;
     bool motion_as_ds4;
     bool touchpad_as_ds4;
-    bool ds5_inputtino_randomize_mac;
+    bool virtualhid_randomize_mac;
 
     bool keyboard;
     bool mouse;

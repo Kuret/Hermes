@@ -28,6 +28,21 @@ namespace input {
     const std::string &session_tag = {}
   );
 
+#ifdef SUNSHINE_TESTS
+  /**
+   * @brief Construct a stream with injected devices and no delayed mouse movement.
+   * @param mail Stream mailbox.
+   * @param platform Owning platform input handle (a fake runtime in unit tests).
+   * @param client Owning per-client input context from that handle.
+   * @return Independent stream input state for exercising protocol and reset paths.
+   */
+  std::shared_ptr<input_t> alloc_for_testing(
+    safe::mail_t mail,
+    std::shared_ptr<platf::input_t> platform,
+    std::unique_ptr<platf::client_input_t> client
+  );
+#endif
+
   /**
    * @brief The rectangle a touchscreen or a pen is addressed in.
    *

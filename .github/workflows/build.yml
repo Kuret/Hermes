@@ -97,6 +97,7 @@ jobs:
             libva \
             libvdpau \
             libcap \
+            acl \
             curl \
             libevdev \
             systemd \
@@ -384,6 +385,7 @@ jobs:
             libva \
             libvdpau \
             libcap \
+            acl \
             curl \
             libevdev \
             systemd \
@@ -526,6 +528,7 @@ jobs:
             libva-dev \
             libvdpau-dev \
             libcap-dev \
+            libacl1-dev \
             libcurl4-openssl-dev \
             libevdev-dev \
             libudev-dev \
@@ -731,6 +734,7 @@ jobs:
             libva-devel \
             libvdpau-devel \
             libcap-devel \
+            libacl-devel \
             libcurl-devel \
             libevdev-devel \
             systemd-devel \
