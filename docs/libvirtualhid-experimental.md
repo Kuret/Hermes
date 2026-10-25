@@ -148,6 +148,25 @@ selection option: Linux builds use libvirtualhid exclusively.
 
 ## Validation
 
+The 2026-10-25 checkpoint passed the complete Hermes build, 62 selected Hermes
+tests and 176 library tests in the
+[compiler job](https://github.com/MrOz59/Hermes/actions/runs/40151792958/job/121044822644).
+The [session-account job](https://github.com/MrOz59/Hermes/actions/runs/40153673474/job/121050309949)
+passed 58 checks with real UIDs, including hotplug while broker reconciliation
+was paused. The [kernel job](https://github.com/MrOz59/Hermes/actions/runs/40153673474/job/121050328653)
+passed 32 Hermes tests and four library runtime/event-backend tests. All seven
+controller profiles completed 1000 batches at 1000 Hz without SYN_DROPPED or
+cross-seat keyboard events; both Xbox event profiles delivered non-root rumble.
+These results do not validate an entire streamed Hestia desktop or real games.
+
+The kernel job gives one udev daemon exclusive control of the disposable
+guest's device nodes. Native Switch evdev validation requires hid_nintendo;
+when Azure omits it, CI builds that driver from the matching upstream Linux
+series against the running kernel's headers. A runtime-harness or migration-note
+change may reuse binaries from a passing compiler job after checking that all
+compiled inputs remain identical. Source, dependency, CMake and compiled-test
+changes always trigger a new complete build.
+
 The branch workflow compiles Hermes and runs the library's identity/discovery,
 UHID round-trip and fail-closed isolation tests. On a host with uinput/uhid,
 the library consumer suite also verifies evdev, libinput, SDL, touchscreen,

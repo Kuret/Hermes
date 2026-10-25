@@ -46,13 +46,18 @@ jobs:
               const comparison = await github.rest.repos.compareCommits({
                 owner, repo, base: run.head_sha, head: context.sha
               });
-              // Only this runtime harness may differ. Any source, dependency,
-              // CMake or compiled test change requires a fresh full build.
+              // Only this runtime harness and these migration notes may differ.
+              // Source, dependency, CMake or compiled test changes rebuild.
+              const runtimeOnly = new Set([
+                '.github/workflows/libvirtualhid-experimental.yml',
+                'docs/libvirtualhid-experimental.md',
+                'docs/libvirtualhid-merge-handoff.md'
+              ]);
               if (!['ahead', 'identical'].includes(comparison.data.status) ||
                   comparison.data.merge_base_commit.sha !== run.head_sha ||
                   !comparison.data.files ||
                   !comparison.data.files.every(f =>
-                    f.filename === '.github/workflows/libvirtualhid-experimental.yml' &&
+                    runtimeOnly.has(f.filename) &&
                     f.status === 'modified')) continue;
               core.info(`Reusing passing build/tests from run ${run.id}, commit ${run.head_sha}`);
               core.setOutput('run_id', String(run.id));

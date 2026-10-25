@@ -1,14 +1,14 @@
 # Retomada: migração libvirtualhid antes do merge
 
-Checkpoint de 25/10/2026, Australia/Sydney. Trabalho pausado a pedido do usuário
-para reiniciar o computador e continuar em outra máquina. **Não fazer merge na
+Checkpoint atualizado em 25/10/2026, Australia/Sydney, após a continuação e
+validação das branches experimentais. **Não fazer merge na
 main do Hermes nem alterar Hermes-KMS nesta retomada sem nova autorização.**
 
 ## Continuação: ACLs automáticas e cache transacional
 
 O lote atual implementa a tarefa de ACLs abaixo, anteriormente pendente. O
 Hermes fixa `14ee6c4717d32b678c2983bfa6c54019b944d421` da feature branch do
-nosso fork. Os hashes e resultados nas seções anteriores são históricos.
+nosso fork. Os hashes e resultados nas seções seguintes são históricos.
 
 - START valida e persiste cliente/conta/UID/seat antes de conceder acesso;
   scopes só herdam o seat. Não há API de ACL aceitando caminho ou UID remoto.
@@ -18,25 +18,46 @@ nosso fork. Os hashes e resultados nas seções anteriores são históricos.
 - A regra 99-hermes-session-input aplica ACL via helper root antes do evento
   udev chegar ao SDL/libinput, usando um lock curto separado das operações
   demoradas de conta/systemd. Um loop de 500 ms reconcilia hotplug e reinícios.
-  STOP/PURGE e
-  falhas de launch encerram as unidades gerenciadas antes de revogar; uma
+  STOP/PURGE e falhas de launch encerram as unidades gerenciadas antes de revogar; uma
   falha retém o registro para retry e impede liberar a conta prematuramente.
 - O libvirtualhid só confirma cache após submit bem-sucedido. Sensores/touchpad
   ativos com valores não finitos são rejeitados antes de conversões HID;
   botões seguintes continuam funcionando. A normalização de eixos é mantida.
 - A CI ganha um job independente com o broker empacotado, systemd e duas
   contas reais, incluindo event/hidraw, SDL inicializado antes dos devices,
-  hotplug, restart e revogação. O teste
-  anterior de kernel passou pelo roteamento udev, mas parou por falta de
-  libXtst no container; as dependências X11 de runtime foram completadas.
+  hotplug, restart e revogação. SDL é identificado por seat no sysfs: seu nome
+  pode ser normalizado pela biblioteca e não é uma chave de identidade.
 
 Validação local: biblioteca e exemplos compilados com warnings-as-errors;
 136 testes da biblioteca aprovados. Os testes puros de lease/identidade/ACL
 passaram; o teste que escreve uma ACL de UID real fica explicitamente pulado
-neste namespace, que mapeia apenas UID 0, e deve executar no runner/VM. O
-broker compila isoladamente com -Werror. A suite com systemd/UIDs e o build
-completo do Hermes precisam passar na CI antes de promover a integração.
-A validação com Hestia e jogos reais continua pendente.
+neste namespace, que mapeia apenas UID 0. Esse teste executou e passou na CI,
+sem skip. O broker compila isoladamente com -Werror.
+
+Validação remota concluída:
+
+- [Build completo de sunshine/broker/testes e 62 testes do Hermes + 176 da biblioteca](https://github.com/MrOz59/Hermes/actions/runs/40151792958/job/121044822644),
+  fontes em `8bef7dd19898dbf2e0cc469a7b7125b73d6d61dd`.
+- [58 checks do broker com contas reais](https://github.com/MrOz59/Hermes/actions/runs/40153673474/job/121050309949),
+  incluindo SDL iniciado antes dos controles e hotplug com o daemon pausado.
+- [32 testes do adapter/kernel e quatro de runtime/uinput](https://github.com/MrOz59/Hermes/actions/runs/40153673474/job/121050328653).
+  Todos os sete perfis passaram por 1000 lotes a 1000 Hz, sem SYN_DROPPED
+  nem teclas vazando para outro seat; o rumble Xbox funcionou sob UID sem
+  privilégios e sem hidraw.
+- [CI da biblioteca com GCC 13 e Clang 18](https://github.com/MrOz59/libvirtualhid/actions/runs/40136434143).
+  No GCC, 195/197 testes passaram; xpadneo e descoberta de filhos renomeados
+  com hid-playstation ficaram explicitamente pulados por falta dos drivers.
+
+O job de kernel usa um único udev para evitar disputas de chmod/chgrp entre
+Ubuntu e Arch. O runner Azure não inclui hid_nintendo: a CI o compila dos
+fontes upstream contra os headers do kernel em execução, sem retirar o teste
+de botões Switch. Mudanças somente no harness/notas reutilizam artefatos de
+um build aprovado após comparar todos os arquivos com o SHA compilado;
+mudanças de fontes, testes compilados, dependência ou CMake sempre recompilam.
+
+A validação de um desktop transmitido com Hestia e jogos reais, dos recursos
+nativos dentro do container de produção e dos filhos específicos de
+hid-playstation continua pendente. As seções abaixo preservam o histórico.
 
 ## Continuação de 25/10: descoberta e estado de input
 
