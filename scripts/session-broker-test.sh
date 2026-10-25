@@ -26,10 +26,10 @@ HID_PROBE_PID=""
 SDL_A_PID=""
 SDL_B_PID=""
 INPUT_TEST_ROOT=""
-BROKER_PAUSED_PID=""
+BROKER_FROZEN=0
 
 cleanup_input_probe() {
-	[ -z "$BROKER_PAUSED_PID" ] || kill -CONT "$BROKER_PAUSED_PID" 2>/dev/null || true
+	if [ "$BROKER_FROZEN" -eq 1 ]; then systemctl thaw hermes-session-broker.service 2>/dev/null || true; fi
 	for pid in "$SDL_A_PID" "$SDL_B_PID"; do
 		[ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
 	done
@@ -174,8 +174,6 @@ ok 'the account is in none of wheel, sudo, video, input or render'
 
 expect 'ENSURE is idempotent'   $'ENSURE '"$CLIENT_A"$'\n' "OK hermes-s01 $UID_A *"
 expect 'LOOKUP finds it'        $'LOOKUP '"$CLIENT_A"$'\n' "OK hermes-s01 $UID_A *"
-expect 'a second client gets slot 2' $'ENSURE '"$CLIENT_B"$'\n' "OK hermes-s02 * *"
-expect 'LIST reports both'      $'LIST\n' "OK $CLIENT_A=hermes-s01 $CLIENT_B=hermes-s02"
 
 # ---------------------------------------------------------------- sessions ---
 expect 'nothing is running yet' $'STATUS '"$CLIENT_A"$'\n' 'OK inactive hermes-session-01.service'
@@ -206,6 +204,39 @@ for _ in $(seq 50); do
 	sleep 0.1
 done
 expect 'STATUS reports it active' $'STATUS '"$CLIENT_A"$'\n' 'OK active hermes-session-01.service'
+
+# Simulate a slow account-database operation by holding its real mutation lock.
+# A second ENSURE must queue, while the active client's liveness remains usable.
+SECOND_ACCOUNT="$(python3 - "$SOCKET" "$CLIENT_A" "$CLIENT_B" <<-'PY'
+	import fcntl, select, socket, sys
+	def connect(request, timeout):
+	    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+	    peer.settimeout(timeout)
+	    peer.connect(sys.argv[1])
+	    peer.sendall(request.encode())
+	    peer.shutdown(socket.SHUT_WR)
+	    return peer
+	def response(peer):
+	    text = b''
+	    while b'\n' not in text:
+	        chunk = peer.recv(4096)
+	        assert chunk, 'broker closed before replying'
+	        text += chunk
+	    return text.decode().strip()
+	with open('/run/hermes/session-broker.lock', 'r+') as lock:
+	    fcntl.flock(lock, fcntl.LOCK_EX)
+	    with connect('ENSURE ' + sys.argv[3] + '\n', 180) as pending:
+	        assert not select.select([pending], [], [], 0.05)[0], 'ENSURE did not queue behind the mutation lock'
+	        with connect('STATUS ' + sys.argv[2] + '\n', 2) as status:
+	            assert response(status) == 'OK active hermes-session-01.service', 'liveness was blocked or lost'
+	        fcntl.flock(lock, fcntl.LOCK_UN)
+	        print(response(pending))
+PY
+)"
+[[ "$SECOND_ACCOUNT" == "OK hermes-s02 "* ]] || fail 'the second account was not provisioned' "$SECOND_ACCOUNT"
+ok 'a second client gets slot 2'
+ok 'an active session remains queryable during queued account provisioning'
+expect 'LIST reports both' $'LIST\n' "OK $CLIENT_A=hermes-s01 $CLIENT_B=hermes-s02"
 expect 'no Wayland socket yet'    $'SOCKET '"$CLIENT_A"$'\n' 'ERR notfound*'
 
 python3 -c "
@@ -327,17 +358,19 @@ wait_input_access() {
 udevadm control --log-level=debug
 # The asynchronous reconciliation loop cannot rescue these add events. The
 # production udev helper must grant access before already-running SDL sees them.
-BROKER_PAUSED_PID="$(systemctl show -p MainPID --value hermes-session-broker.service)"
-[ "$BROKER_PAUSED_PID" -gt 0 ] || fail 'the broker has no process to pause'
-flock --exclusive --timeout 5 /run/hermes/session-broker.lock.input kill -STOP "$BROKER_PAUSED_PID"
+systemctl is-active --quiet hermes-session-broker.service || fail 'the broker is not active'
+BROKER_FROZEN=1
+# Freeze every worker, not just MainPID. The udev helper runs in udev's unit
+# and must independently authorize the new nodes before their add broadcasts.
+flock --exclusive --timeout 5 /run/hermes/session-broker.lock.input systemctl freeze hermes-session-broker.service
 start_sdl_probes
 start_input_probe
 start_hid_probe
 udevadm settle --timeout=10
 wait_input_access
 wait_sdl_probes
-kill -CONT "$BROKER_PAUSED_PID"
-BROKER_PAUSED_PID=""
+systemctl thaw hermes-session-broker.service
+BROKER_FROZEN=0
 ok 'udev grants hotplug access while broker reconciliation is paused'
 ! can_open_input hermes-s01 "$NODE_B" || fail 'client A can open client B input'
 ! can_open_input hermes-s02 "$NODE_A" || fail 'client B can open client A input'

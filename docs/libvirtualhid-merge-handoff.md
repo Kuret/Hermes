@@ -27,10 +27,24 @@ cliente ou um reinício do broker.
   separadamente do host e exercita o daemon real com mapa/socket privados,
   sem criar contas nem dispositivos, antes dos testes com systemd.
 
+Validação de `6700e5c835c58e091958084de72fcbdd7f4a7b83`:
+
+- [35 testes independentes de RPC, workers, locks e ACLs, sem skips; três checks
+  do daemon real e 58 checks com contas reais](https://github.com/MrOz59/Hermes/actions/runs/40157668651/job/121062412179).
+- [Build completo, 77 testes do Hermes e 176 da biblioteca](https://github.com/MrOz59/Hermes/actions/runs/40157668651/job/121062440390).
+- [32 testes de kernel e quatro de runtime/uinput](https://github.com/MrOz59/Hermes/actions/runs/40157668651/job/121065555329).
+
+Os ajustes posteriores do harness também verificam STATUS de uma sessão ativa
+enquanto ENSURE de outra aguarda o lock, e congelam o cgroup inteiro do broker
+para impedir que workers auxiliem o teste de hotplug. A política de artefatos
+tem testes próprios e compara também receita, imagem e flags do compilador;
+mudanças nesses campos ou execução manual exigem build novo.
+
 Compilação local com warnings-as-errors e testes de processos/lock aprovados.
-Este ambiente nega sockets AF_UNIX, por isso os testes de IPC devem passar
-obrigatoriamente no job do broker (sem permitir skip na CI). Os resultados de
-CI abaixo comprovam o checkpoint anterior; esta rodada precisa de nova CI.
+Este ambiente nega sockets AF_UNIX; os testes de IPC executaram obrigatoriamente
+na CI, sem permitir skip. Hestia, jogos reais, o container de produção e os
+recursos dependentes de hid-playstation continuam pendentes. Os resultados
+seguintes preservam checkpoints anteriores.
 
 ## Checkpoint anterior: ACLs automáticas e cache transacional
 

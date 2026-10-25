@@ -163,6 +163,24 @@ selection option: Linux builds use libvirtualhid exclusively.
 
 ## Validation
 
+The startup/liveness checkpoint at `6700e5c` passed
+[35 independent broker/client/ACL tests, three real-daemon concurrency checks
+and 58 checks with real accounts](https://github.com/MrOz59/Hermes/actions/runs/40157668651/job/121062412179).
+The [complete compiler job](https://github.com/MrOz59/Hermes/actions/runs/40157668651/job/121062440390)
+passed 77 selected Hermes tests and 176 library tests; the
+[kernel job](https://github.com/MrOz59/Hermes/actions/runs/40157668651/job/121065555329)
+passed 32 adapter/kernel tests and four library runtime/event-backend tests.
+The runtime harness additionally queries a live session during queued account
+provisioning and freezes the broker's entire cgroup during SDL hotplug checks,
+so background workers cannot rescue a missed udev authorization.
+
+Artifact reuse also compares the compiler job and global configuration, not
+just changed filenames. Build flags, dependency installation and compiler image
+changes invalidate reuse. Policy regression cases run in CI; a manual workflow
+execution always requests a fresh complete build.
+
+Earlier checkpoint:
+
 The 2026-10-25 checkpoint passed the complete Hermes build, 62 selected Hermes
 tests and 176 library tests in the
 [compiler job](https://github.com/MrOz59/Hermes/actions/runs/40151792958/job/121044822644).

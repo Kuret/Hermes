@@ -25,13 +25,62 @@ jobs:
     outputs:
       run_id: ${{ steps.reuse.outputs.run_id }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github/workflows/libvirtualhid-experimental.yml
+            scripts/tests/test_input_artifact_reuse.mjs
+      - name: Test artifact provenance and compiler recipe invalidation
+        run: node scripts/tests/test_input_artifact_reuse.mjs
       - uses: actions/github-script@v7
         id: reuse
         with:
           script: |
             core.setOutput('run_id', '');
+            if (context.eventName === 'workflow_dispatch') return;
             if (!context.ref.startsWith('refs/heads/')) return;
             const {owner, repo} = context.repo;
+            const workflowPath = '.github/workflows/libvirtualhid-experimental.yml';
+            const readWorkflow = async ref => {
+              const response = await github.rest.repos.getContent({owner, repo, path: workflowPath, ref});
+              if (response.data.type !== 'file' || response.data.encoding !== 'base64') return null;
+              return Buffer.from(response.data.content, 'base64').toString('utf8');
+            };
+            const compilerRecipe = text => {
+              if (text === null) return null;
+              const lines = text.replace(/\r\n/g, '\n').split('\n');
+              let inJobs = false;
+              const starts = lines.flatMap((line, index) => {
+                if (/^[^\s#]/.test(line)) inJobs = line === 'jobs:';
+                return inJobs && line === '  linux:' ? [index] : [];
+              });
+              if (starts.length !== 1) return null;
+              const start = starts[0];
+              let end = start + 1;
+              while (end < lines.length && !/^  [\w-]+:\s*$/.test(lines[end]) &&
+                     !/^[^\s#]/.test(lines[end])) ++end;
+              const compiler = lines.slice(start, end).filter(line =>
+                line !== '    needs: artifacts' && line !== "    if: needs.artifacts.outputs.run_id == ''").join('\n');
+              // Unrecognized cross-job/template inputs require a fresh build.
+              if (compiler.includes('$' + '{{') || compiler.includes('needs.')) return null;
+              let ignored = false;
+              inJobs = false;
+              const recipe = lines.filter(line => {
+                if (/^[^\s#]/.test(line)) {
+                  inJobs = line === 'jobs:';
+                  ignored = false;
+                }
+                const job = /^  ([\w-]+):\s*$/.exec(line);
+                if (inJobs && job) ignored = ['artifacts', 'broker', 'kernel'].includes(job[1]);
+                return !ignored;
+              }).join('\n');
+              // Aliases could pull changed values from an ignored runtime job.
+              if (/(^|[\s:])[&*][\w-]+/.test(recipe)) return null;
+              return recipe;
+            };
+            const currentRecipe = compilerRecipe(await readWorkflow(context.sha));
+            if (currentRecipe === null) return;
             const runs = await github.rest.actions.listWorkflowRuns({
               owner, repo, workflow_id: 'libvirtualhid-experimental.yml',
               branch: context.ref.slice('refs/heads/'.length),
@@ -50,6 +99,9 @@ jobs:
               // Source, dependency, CMake or compiled test changes rebuild.
               const runtimeOnly = new Set([
                 '.github/workflows/libvirtualhid-experimental.yml',
+                'scripts/session-broker-test.sh',
+                'scripts/session-broker-concurrency-test.py',
+                'scripts/tests/test_input_artifact_reuse.mjs',
                 'docs/libvirtualhid-experimental.md',
                 'docs/libvirtualhid-merge-handoff.md'
               ]);
@@ -58,7 +110,10 @@ jobs:
                   !comparison.data.files ||
                   !comparison.data.files.every(f =>
                     runtimeOnly.has(f.filename) &&
-                    f.status === 'modified')) continue;
+                    ['modified', 'added'].includes(f.status))) continue;
+              // The workflow also contains build flags, dependency installation
+              // and the compiler image. Those must match, even for a YAML-only edit.
+              if (compilerRecipe(await readWorkflow(run.head_sha)) !== currentRecipe) continue;
               core.info(`Reusing passing build/tests from run ${run.id}, commit ${run.head_sha}`);
               core.setOutput('run_id', String(run.id));
               return;
