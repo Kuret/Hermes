@@ -330,24 +330,34 @@ EOF
     return 0
   }
 
+  # The fork's CI builds a package per distribution release, like Hermes'
+  # own, and keeps them on a rolling release.
+  local pattern assets url file src
+  case "$distro" in
+    arch) pattern='gamescope-hermes-.*-x86_64\.pkg\.tar\.zst$' ;;
+    ubuntu) pattern="gamescope-hermes_.*_ubuntu${distro_version}_amd64\.deb$" ;;
+    fedora) pattern="gamescope-hermes-.*\.fc${distro_version}\.x86_64\.rpm$" ;;
+  esac
+  if assets=$(release_assets "$GAMESCOPE_REPO" "$GAMESCOPE_RELEASE" 2>/dev/null) &&
+    url=$(printf '%s\n' "$assets" | grep -E "$pattern" | head -n1) &&
+    [ -n "$url" ]; then
+    file="${workdir}/${url##*/}"
+    download "$url" "$file"
+    install_local_package "$file"
+    did_gamescope=1
+    ok "Gamescope for Hermes installed in /usr/lib/hermes-gamescope."
+    return 0
+  fi
+
   if [ "$distro" = arch ]; then
-    local assets url file src
-    if assets=$(release_assets "$GAMESCOPE_REPO" "$GAMESCOPE_RELEASE" 2>/dev/null) &&
-      url=$(printf '%s\n' "$assets" | grep -E 'gamescope-hermes-.*\.pkg\.tar\.zst$' | head -n1) &&
-      [ -n "$url" ]; then
-      file="${workdir}/${url##*/}"
-      download "$url" "$file"
-      install_local_package "$file"
+    info "No prebuilt package was found; building it (a few minutes)."
+    pkg_install base-devel git
+    src="${workdir}/gamescope"
+    run git clone --recursive --branch "$GAMESCOPE_BRANCH" "https://github.com/${GAMESCOPE_REPO}.git" "$src"
+    if [ "$DRY_RUN" = 0 ]; then
+      (cd "$src/packaging/hermes" && run makepkg -si --noconfirm --needed)
     else
-      info "No prebuilt package was found; building it (a few minutes)."
-      pkg_install base-devel git
-      src="${workdir}/gamescope"
-      run git clone --recursive --branch "$GAMESCOPE_BRANCH" "https://github.com/${GAMESCOPE_REPO}.git" "$src"
-      if [ "$DRY_RUN" = 0 ]; then
-        (cd "$src/packaging/hermes" && run makepkg -si --noconfirm --needed)
-      else
-        run makepkg -si --noconfirm --needed
-      fi
+      run makepkg -si --noconfirm --needed
     fi
     did_gamescope=1
     ok "Gamescope for Hermes installed in /usr/lib/hermes-gamescope."
@@ -355,10 +365,10 @@ EOF
   fi
 
   explain <<EOF
-There is no package for ${distro}; it can be built from source into
-${GAMESCOPE_SOURCE_PREFIX}, the other place Hermes looks. Gamescope needs
-recent libraries, and the build may fail on an older release. The WSI layer
-is left out, since it needs newer Vulkan headers than most releases ship.
+No package was found for ${distro} ${distro_version}; it can be built from
+source into ${GAMESCOPE_SOURCE_PREFIX}, the other place Hermes looks. Gamescope
+needs recent libraries, and the build may fail on an older release. The WSI
+layer is left out, since it needs newer Vulkan headers than most releases ship.
 EOF
   ask "Build it from source?" n || {
     notes+=("Isolated application sessions need Hermes' Gamescope; see https://github.com/${GAMESCOPE_REPO}/blob/${GAMESCOPE_BRANCH}/HERMES.md.")
