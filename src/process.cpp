@@ -1790,13 +1790,6 @@ namespace proc {
         std::filesystem::create_directories(staging, staging_ec);
         plan = platf::session_devices::plan_t::isolate(staging.string(), *devices);
       }
-      if (devices->devices) {
-        // Created before any of the seat's devices, which come with the stream.
-        runtime->isolated_seat_flag = (std::filesystem::path {host_runtime_dir()} / "hermes" / "isolated" / runtime->seat_id).string();
-        std::error_code flag_ec;
-        std::filesystem::create_directories(std::filesystem::path {runtime->isolated_seat_flag}.parent_path(), flag_ec);
-        std::ofstream {runtime->isolated_seat_flag};
-      }
       runtime->process = platf::session_devices::run_command(
         plan.get(),
         launch_command,
@@ -1818,6 +1811,15 @@ namespace proc {
                         << (devices->sound ? "hidden" : "visible") << '.';
       }
       if (devices->devices) {
+        // Before any of the seat's devices, which come with the stream. For
+        // 60-hermes.rules: the session's mount namespace and Hermes' pid, to
+        // tell the Steam Input pads the session makes; for 74-: no ACL.
+        runtime->isolated_seat_flag = (std::filesystem::path {host_runtime_dir()} / "hermes" / "isolated" / runtime->seat_id).string();
+        std::error_code flag_ec;
+        std::filesystem::create_directories(std::filesystem::path {runtime->isolated_seat_flag}.parent_path(), flag_ec);
+        std::ofstream {runtime->isolated_seat_flag}
+          << std::filesystem::read_symlink("/proc/" + std::to_string(runtime->namespace_pid) + "/ns/mnt", flag_ec).string()
+          << ' ' << ::getpid() << '\n';
         runtime->device_mirror = platf::session_devices::mirror(runtime->namespace_pid, runtime->seat_id);
         if (!runtime->device_mirror) {
           return -1;

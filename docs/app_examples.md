@@ -381,8 +381,11 @@ Both profiles take two fields for what the session sees of the host's `/dev`
   `fuse`, `ntsync`, and in `/dev/input` (and `hidraw`) only the session
   client's devices and the Valve virtual pads Steam Input makes inside the
   session, added as they appear. The host's controllers, keyboards, USB
-  devices and cameras are absent, and the client's devices are closed to the
-  desktop (the seat's ACL is not granted). Hermes needs
+  devices and cameras are absent, and the client's devices and the session's
+  Valve virtual devices are closed to the desktop (they get the session's
+  seat, and no ACL). A uinput device does not record who made it, so a Valve
+  device counts as the session's only while no process outside it, Hermes
+  aside, holds `/dev/uinput`. Hermes needs
   `cap_sys_admin,cap_mknod,cap_sys_chroot+p`; `auto` runs without isolation
   (with a warning) when they are missing, `on` refuses to start.
 - `isolate-sound`: no `/dev/snd`, so applications only reach sound through
