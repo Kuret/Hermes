@@ -7,11 +7,18 @@
 #endif
 
 // standard includes
+#include <cerrno>
 #include <chrono>
+#include <climits>
 #include <csignal>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <thread>
+
+// platform includes
+#include <fcntl.h>
+#include <unistd.h>
 
 // lib includes
 #include <boost/process/v1/child.hpp>
@@ -42,10 +49,10 @@ namespace platf::session_audio {
       }
     }
 
-    // No ALSA, Bluetooth or camera monitors: the sink below is the only
-    // device. The pulse server takes no D-Bus name, which the
+    // No ALSA, Bluetooth or camera monitors: the sink and the mic below are
+    // the only devices. The pulse server takes no D-Bus name, which the
     // host's already owns.
-    std::string pipewire_conf(const std::string &sink, int channels) {
+    std::string pipewire_conf(const std::string &sink, int channels, const std::string &mic) {
       std::string conf = R"(context.properties = {
     core.daemon = true
     core.name = pipewire-0
@@ -68,6 +75,18 @@ context.modules = [
     { name = libpipewire-module-link-factory }
     { name = libpipewire-module-protocol-pulse }
 )";
+      if (!mic.empty()) {
+        conf += R"(    { name = libpipewire-module-pipe-tunnel args = {
+        tunnel.mode = source
+        pipe.filename = ")" + session_mic_fifo(mic) + R"("
+        audio.format = S16LE
+        audio.rate = 48000
+        audio.channels = 1
+        audio.position = [ MONO ]
+        stream.props = { node.name = )" + mic + R"( node.description = "Client microphone" }
+    } }
+)";
+      }
       conf += R"(]
 pulse.properties = {
     server.address = [ "unix:native" ]
@@ -134,13 +153,18 @@ wireplumber.profiles = {
 
     class pipewire_t: public server_t {
     public:
-      explicit pipewire_t(std::string runtime_dir):
-          runtime_dir {std::move(runtime_dir)} {
+      pipewire_t(std::string runtime_dir, std::string mic):
+          runtime_dir {std::move(runtime_dir)},
+          mic {std::move(mic)} {
       }
 
       ~pipewire_t() override {
         stop(wireplumber);
         stop(pipewire);
+        if (!mic.empty()) {
+          std::error_code ec;
+          fs::remove(session_mic_fifo(mic), ec);
+        }
       }
 
       std::string pulse_server() const override {
@@ -152,12 +176,18 @@ wireplumber.profiles = {
       }
 
       std::string runtime_dir;
+      std::string mic;
       bp::child pipewire;
       bp::child wireplumber;
     };
   }  // namespace
 
-  std::unique_ptr<server_t> start(const std::string &runtime_dir, const std::string &sink, int channels) {
+  std::string session_mic_fifo(const std::string &mic) {
+    const char *runtime = std::getenv("XDG_RUNTIME_DIR");
+    return (fs::path {runtime && *runtime ? runtime : "/tmp"} / "hermes" / (mic + ".fifo")).string();
+  }
+
+  std::unique_ptr<server_t> start(const std::string &runtime_dir, const std::string &sink, int channels, const std::string &mic) {
     const auto pipewire = bp::search_path("pipewire");
     const auto wireplumber = bp::search_path("wireplumber");
     if (pipewire.empty() || wireplumber.empty()) {
@@ -168,12 +198,16 @@ wireplumber.profiles = {
     const fs::path dir = fs::path {runtime_dir} / "audio";
     // Not named pipewire.conf, so no system or user fragments apply.
     const auto conf = dir / "hermes-session.conf";
-    if (!write_file(conf, pipewire_conf(sink, channels)) ||
+    if (!write_file(conf, pipewire_conf(sink, channels, mic)) ||
         !write_file(dir / "config/wireplumber/wireplumber.conf.d/hermes-session.conf", wireplumber_conf)) {
       BOOST_LOG(warning) << "Couldn't write the private audio server's config to "sv << dir.string();
       return nullptr;
     }
     std::error_code ec;
+    if (!mic.empty()) {
+      fs::create_directories(fs::path {session_mic_fifo(mic)}.parent_path(), ec);
+      fs::remove(session_mic_fifo(mic), ec);
+    }
 
     // The user's own PipeWire config and WirePlumber state stay out of it.
     auto env = bp::environment {boost::this_process::environment()};
@@ -184,7 +218,7 @@ wireplumber.profiles = {
     env["XDG_CONFIG_HOME"] = (dir / "config").string();
     env["XDG_STATE_HOME"] = (dir / "state").string();
 
-    auto server = std::make_unique<pipewire_t>(runtime_dir);
+    auto server = std::make_unique<pipewire_t>(runtime_dir, mic);
     server->pipewire = bp::child(pipewire, "-c", conf.string(), env, bp::std_in < bp::null, bp::limit_handles, ec);
     if (ec) {
       BOOST_LOG(warning) << "Couldn't start PipeWire: "sv << ec.message();
@@ -207,7 +241,52 @@ wireplumber.profiles = {
       return nullptr;
     }
 
-    BOOST_LOG(info) << "Started a private PipeWire server in "sv << runtime_dir << " with sink ["sv << sink << ']';
+    BOOST_LOG(info) << "Started a private PipeWire server in "sv << runtime_dir << " with sink ["sv << sink << ']'
+                    << (mic.empty() ? ""s : " and mic ["s + mic + ']');
     return server;
+  }
+
+  namespace {
+    class fifo_mic_writer_t: public mic_writer_t {
+    public:
+      fifo_mic_writer_t(int fd, std::string mic):
+          fd {fd},
+          mic {std::move(mic)} {
+      }
+
+      ~fifo_mic_writer_t() override {
+        close(fd);
+      }
+
+      // The caller blocks SIGPIPE: the FIFO loses its reader with its server.
+      // While nobody records, the full FIFO drops writes.
+      void write(const std::int16_t *samples, int count) override {
+        // Writes up to PIPE_BUF are all or nothing, so a full FIFO never
+        // splits a sample.
+        constexpr int chunk = PIPE_BUF / sizeof(std::int16_t);
+        for (int offset = 0; offset < count; offset += chunk) {
+          const auto bytes = std::min(chunk, count - offset) * sizeof(std::int16_t);
+          if (::write(fd, samples + offset, bytes) < 0 && errno == EPIPE && !broken) {
+            broken = true;
+            BOOST_LOG(warning) << "Session mic ["sv << mic << "] is gone; dropping the client's microphone"sv;
+          }
+        }
+      }
+
+    private:
+      int fd;
+      std::string mic;
+      bool broken {};
+    };
+  }  // namespace
+
+  std::unique_ptr<mic_writer_t> open_mic(const std::string &mic) {
+    const auto fifo = session_mic_fifo(mic);
+    const int fd = open(fifo.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+      BOOST_LOG(warning) << "Couldn't open session mic ["sv << fifo << "]: "sv << std::strerror(errno);
+      return nullptr;
+    }
+    return std::make_unique<fifo_mic_writer_t>(fd, mic);
   }
 }  // namespace platf::session_audio

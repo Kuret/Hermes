@@ -130,6 +130,7 @@ namespace proc {
       std::optional<platf::session_broker::account_t> account;
       std::string unit;
       std::string audio_sink;
+      std::string mic_source;  ///< Empty where the client's microphone is not streamed.
       std::unique_ptr<platf::session_audio::server_t> audio_server;  ///< Where the session has its own.
       std::chrono::steady_clock::time_point started_at {std::chrono::steady_clock::now()};
       std::string wayland_display;
@@ -837,6 +838,7 @@ namespace proc {
         audio::remove_session_sink(runtime->audio_sink);
       }
       runtime->audio_sink.clear();
+      runtime->mic_source.clear();
 
       runtime->pipe.reset();
       if (!runtime->display_name.empty()) {
@@ -1256,10 +1258,16 @@ namespace proc {
       const int audio_channels = launch_session->surround_info & 65535;
       const std::string audio_sink = "sink-" + runtime->runtime_id;
       // Preferably in a PipeWire server of its own, which knows no host device
-      // and which the host's server never sees.
-      runtime->audio_server = platf::session_audio::start(runtime->runtime_dir, audio_sink, audio_channels);
+      // and which the host's server never sees. Its mic is silent until a
+      // client's microphone streams into it, so nothing records the host's.
+      const auto mic_source = platf::session_mic_source(audio_sink);
+      runtime->audio_server = platf::session_audio::start(runtime->runtime_dir, audio_sink, audio_channels, mic_source);
       if (runtime->audio_server) {
         runtime->audio_sink = audio_sink;
+        // Clients that negotiate a microphone are heard through this source.
+        if (config::audio.stream_mic) {
+          runtime->mic_source = mic_source;
+        }
       } else if (audio::create_session_sink(audio_sink, audio_channels)) {
         runtime->audio_sink = audio_sink;
         BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " plays into "
@@ -2115,6 +2123,19 @@ namespace proc {
     const auto it = isolated_runtimes.find(launch_session_id);
     if (it != isolated_runtimes.end() && it->second && it->second->audio_server) {
       return it->second->audio_server->pulse_server();
+    }
+#else
+    (void) launch_session_id;
+#endif
+    return {};
+  }
+
+  std::string proc_t::isolated_mic_source(uint32_t launch_session_id) {
+#ifndef _WIN32
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    const auto it = isolated_runtimes.find(launch_session_id);
+    if (it != isolated_runtimes.end() && it->second) {
+      return it->second->mic_source;
     }
 #else
     (void) launch_session_id;

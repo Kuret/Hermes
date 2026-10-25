@@ -4,6 +4,7 @@
  */
 
 // standard includes
+#include <csignal>
 #include <fstream>
 #include <future>
 #include <queue>
@@ -239,6 +240,18 @@ namespace stream {
     AUDIO_FEC_HEADER fecHeader;
   };
 
+  // A client microphone packet (Apollo's mic passthrough), followed by Opus.
+  struct mic_packet_header_t {
+    std::uint8_t flags;
+    std::uint8_t packetType;
+    boost::endian::little_uint16_at sequenceNumber;
+    boost::endian::little_uint32_at timestamp;
+    boost::endian::little_uint32_at ssrc;
+  };
+
+  constexpr std::uint8_t MIC_PACKET_TYPE_OPUS = 0x61;
+  constexpr std::uint32_t MIC_PACKET_MAGIC = 0x12345678;
+
 #pragma pack(pop)
 
   constexpr std::size_t round_to_pkcs7_padded(std::size_t size) {
@@ -336,6 +349,7 @@ namespace stream {
     message_queue_queue_t message_queue_queue;
 
     std::thread recv_thread;
+    std::thread mic_thread;
     std::thread video_thread;
     std::thread audio_thread;
     std::thread control_thread;
@@ -344,6 +358,7 @@ namespace stream {
 
     udp::socket video_sock {io_context};
     udp::socket audio_sock {io_context};
+    udp::socket mic_sock {io_context};
 
     control_server_t control_server;
   };
@@ -406,6 +421,10 @@ namespace stream {
 
       audio_fec_packet_t fec_packet;
       std::unique_ptr<platf::deinit_t> qos;
+
+      /// Set before the session is listed, and only read after.
+      std::shared_ptr<audio::client_mic_t> mic;
+      bool mic_heard {};
     } audio;
 
     struct {
@@ -1390,6 +1409,65 @@ namespace stream {
     }
   }
 
+  void micRecvThread(broadcast_ctx_t &ctx) {
+#ifndef _WIN32
+    // A session mic whose source is gone fails writes with EPIPE instead.
+    sigset_t sigpipe;
+    sigemptyset(&sigpipe);
+    sigaddset(&sigpipe, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &sigpipe, nullptr);
+#endif
+
+    auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
+    std::array<char, 2048> buf;
+    std::vector<std::uint8_t> plaintext;
+    udp::endpoint peer;
+
+    while (!broadcast_shutdown_event->peek()) {
+      boost::system::error_code ec;
+      const auto bytes = ctx.mic_sock.receive_from(asio::buffer(buf), peer, 0, ec);
+      if (ec || bytes <= sizeof(mic_packet_header_t)) {
+        continue;
+      }
+
+      const auto *header = reinterpret_cast<const mic_packet_header_t *>(buf.data());
+      if (header->packetType != MIC_PACKET_TYPE_OPUS || header->ssrc != MIC_PACKET_MAGIC) {
+        continue;
+      }
+      const std::uint16_t sequence = header->sequenceNumber;
+      const std::string_view cipher {buf.data() + sizeof(mic_packet_header_t), bytes - sizeof(mic_packet_header_t)};
+
+      std::shared_ptr<audio::client_mic_t> mic;
+      {
+        auto lg = ctx.control_server._sessions.lock();
+        for (auto *session : *ctx.control_server._sessions) {
+          if (!session->audio.mic || session->audio.peer.address() != peer.address() ||
+              session->state.load(std::memory_order_relaxed) != session::state_e::RUNNING) {
+            continue;
+          }
+
+          crypto::aes_t iv(16);
+          *(std::uint32_t *) iv.data() = util::endian::big<std::uint32_t>(session->audio.avRiKeyId + sequence);
+          if (session->audio.cipher.decrypt(cipher, plaintext, &iv)) {
+            BOOST_LOG(debug) << "Dropping a microphone packet from ["sv << session->device_name << "] that does not decrypt"sv;
+            break;
+          }
+
+          if (!session->audio.mic_heard) {
+            session->audio.mic_heard = true;
+            BOOST_LOG(info) << "Receiving the microphone of ["sv << session->device_name << "] into ["sv << session->config.mic_source << ']';
+          }
+          mic = session->audio.mic;
+          break;
+        }
+      }
+
+      if (mic) {
+        mic->write(sequence, plaintext.data(), plaintext.size());
+      }
+    }
+  }
+
   void videoBroadcastThread(udp::socket &sock) {
     auto shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     auto packets = mail::man->queue<video::packet_t>(mail::video_packets);
@@ -1900,6 +1978,20 @@ namespace stream {
 
     ctx.recv_thread = std::thread {recvThread, std::ref(ctx)};
 
+    if (config::audio.stream_mic) {
+      const auto mic_port = net::map_port(MIC_STREAM_PORT);
+      ctx.mic_sock.open(protocol, ec);
+      if (!ec) {
+        ctx.mic_sock.bind(udp::endpoint(protocol, mic_port), ec);
+      }
+      if (ec) {
+        BOOST_LOG(error) << "Couldn't listen for client microphones on port ["sv << mic_port << "]: "sv << ec.message();
+        ctx.mic_sock.close();
+      } else {
+        ctx.mic_thread = std::thread {micRecvThread, std::ref(ctx)};
+      }
+    }
+
     return 0;
   }
 
@@ -1932,6 +2024,13 @@ namespace stream {
     ctx.audio_thread.join();
     BOOST_LOG(debug) << "Waiting for main control thread to end..."sv;
     ctx.control_thread.join();
+    if (ctx.mic_thread.joinable()) {
+      // Wakes the blocked receive; closing alone would not.
+      boost::system::error_code ec;
+      ctx.mic_sock.shutdown(udp::socket::shutdown_receive, ec);
+      ctx.mic_thread.join();
+      ctx.mic_sock.close();
+    }
     BOOST_LOG(debug) << "All broadcasting threads ended"sv;
 
     broadcast_shutdown_event->reset();
@@ -2307,6 +2406,10 @@ namespace stream {
 
       session.control.expected_peer_address = addr_string;
       BOOST_LOG(debug) << "Expecting incoming session connections from "sv << addr_string;
+
+      if (!session.config.mic_source.empty()) {
+        session.audio.mic = audio::open_client_mic(session.config.mic_source);
+      }
 
       // Insert this session into the session list
       {

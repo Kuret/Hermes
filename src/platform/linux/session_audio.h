@@ -15,7 +15,8 @@ namespace platf::session_audio {
   /**
    * @brief PipeWire and WirePlumber running in a session's runtime directory.
    *
-   * The server knows no hardware: its only device is the session's sink. Applications started with the session's
+   * The server knows no hardware: its only devices are the session's sink and,
+   * when given one, its mic. Applications started with the session's
    * XDG_RUNTIME_DIR find it on their own, through PulseAudio, PipeWire, ALSA or
    * JACK, and the host's server never sees them. Stopped on destruction.
    */
@@ -31,11 +32,18 @@ namespace platf::session_audio {
   };
 
   /**
-   * @brief Start a server in runtime_dir with sink as its only device.
+   * @brief Start a server in runtime_dir with sink as its only output and, if
+   *        mic is not empty, a source of that name playing session_mic_fifo(mic).
    * @return nullptr where PipeWire or WirePlumber is missing or fails to start.
    */
-  std::unique_ptr<server_t> start(const std::string &runtime_dir, const std::string &sink, int channels);
+  std::unique_ptr<server_t> start(const std::string &runtime_dir, const std::string &sink, int channels, const std::string &mic);
 
   /// Record sink's monitor on the server at pulse_server.
   std::unique_ptr<mic_t> microphone(const std::string &pulse_server, const std::string &sink, const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size);
+
+  /// The FIFO a session mic reads from.
+  std::string session_mic_fifo(const std::string &mic);
+
+  /// Open a session mic for writing 48 kHz mono samples, or nullptr.
+  std::unique_ptr<mic_writer_t> open_mic(const std::string &mic);
 }  // namespace platf::session_audio

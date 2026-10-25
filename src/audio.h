@@ -10,7 +10,11 @@
 #include "utility.h"
 
 #include <bitset>
+#include <memory>
+#include <optional>
 #include <string>
+
+#include <opus/opus.h>
 
 namespace audio {
   enum stream_config_e : int {
@@ -111,6 +115,23 @@ namespace audio {
    *        already gone is not an error.
    */
   void remove_session_sink(const std::string &name);
+
+  /// Decodes a client's Opus microphone packets into a session mic.
+  class client_mic_t {
+  public:
+    client_mic_t(std::unique_ptr<platf::mic_writer_t> writer);
+
+    /// Packets older than the last one are dropped; lost ones are concealed.
+    void write(std::uint16_t sequence, const std::uint8_t *data, std::size_t size);
+
+  private:
+    util::safe_ptr<OpusDecoder, opus_decoder_destroy> decoder;
+    std::unique_ptr<platf::mic_writer_t> writer;
+    std::optional<std::uint16_t> last_sequence;
+  };
+
+  /// nullptr if the session mic cannot be opened.
+  std::unique_ptr<client_mic_t> open_client_mic(const std::string &source);
 
   /**
    * @brief Get the reference to the audio context.

@@ -3,6 +3,8 @@
  * @brief Definitions for audio capture and encoding.
  */
 // standard includes
+#include <algorithm>
+#include <array>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -473,6 +475,58 @@ namespace audio {
       return;
     }
     ref->control->remove_session_sink(name);
+  }
+
+  client_mic_t::client_mic_t(std::unique_ptr<platf::mic_writer_t> writer):
+      writer {std::move(writer)} {
+    int status = OPUS_OK;
+    decoder.reset(opus_decoder_create(SAMPLE_RATE, 1, &status));
+    if (status != OPUS_OK) {
+      decoder.reset();
+      BOOST_LOG(error) << "Couldn't create the client microphone decoder: "sv << opus_strerror(status);
+    }
+  }
+
+  void client_mic_t::write(std::uint16_t sequence, const std::uint8_t *data, std::size_t size) {
+    const int frame = opus_packet_get_nb_samples(data, size, SAMPLE_RATE);
+    if (!decoder || frame <= 0) {
+      return;
+    }
+
+    int lost = 0;
+    if (last_sequence) {
+      const auto gap = static_cast<std::int16_t>(sequence - *last_sequence);
+      if (gap <= 0) {
+        return;
+      }
+      lost = std::min(gap - 1, 5);
+    }
+    last_sequence = sequence;
+
+    // 120 ms, Opus' longest frame.
+    std::array<opus_int16, 5760> pcm;
+    // Conceal all but the last lost frame, which this packet's FEC carries.
+    for (; lost > 0; --lost) {
+      const bool fec = lost == 1;
+      const int samples = opus_decode(decoder.get(), fec ? data : nullptr, fec ? size : 0, pcm.data(), frame, fec);
+      if (samples > 0) {
+        writer->write(pcm.data(), samples);
+      }
+    }
+
+    const int samples = opus_decode(decoder.get(), data, size, pcm.data(), pcm.size(), 0);
+    if (samples > 0) {
+      writer->write(pcm.data(), samples);
+    }
+  }
+
+  std::unique_ptr<client_mic_t> open_client_mic(const std::string &source) {
+#ifndef _WIN32
+    if (auto writer = platf::session_audio::open_mic(source)) {
+      return std::make_unique<client_mic_t>(std::move(writer));
+    }
+#endif
+    return nullptr;
   }
 
   bool is_audio_ctx_sink_available(const audio_ctx_t &ctx) {

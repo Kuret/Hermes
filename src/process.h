@@ -232,6 +232,9 @@ namespace proc {
     /** The audio server an isolated session's sink lives in, or empty for the host's. */
     std::string isolated_audio_server(uint32_t launch_session_id);
 
+    /** The source playing the client's microphone to an isolated session, or empty. */
+    std::string isolated_mic_source(uint32_t launch_session_id);
+
     /** Reattach launch metadata to a still-running client runtime. */
     bool prepare_isolated_resume(
       std::shared_ptr<rtsp_stream::launch_session_t> launch_session
