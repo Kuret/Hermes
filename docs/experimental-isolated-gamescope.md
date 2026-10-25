@@ -1,114 +1,106 @@
 # Experimental isolated Gamescope sessions
 
-This branch narrows isolated sessions to one goal: keep the host's desktop
-usable while a game runs in its own Gamescope session, on its own Hermes-KMS
-card and seat, as the same Unix user. Separate desktops and separate files per
-client are not the aim here. Input is the MrOz59/libvirtualhid stack from
+This branch narrows isolated sessions to one goal: a game runs in its own
+Gamescope session, on its own Hermes-KMS card and input seat, as the same Unix
+user, while the host's desktop stays in use - and neither gets in the other's
+way. Separate desktops and separate files per client are not the aim here.
+
+Most of the session work is d3adb5's, from
+[#57](https://github.com/MrOz59/Hermes/issues/57) and
+[d3adb5/hermes](https://github.com/d3adb5/hermes), cherry-picked with his
+authorship. Input is the MrOz59/libvirtualhid stack from
 `experimental/libvirtualhid-input`, merged in.
 
-The setup follows the one reported in [#57](https://github.com/MrOz59/Hermes/issues/57)
-(X11 desktop, Gamescope on Wayland per session, AMD GPU, CachyOS).
+## Setting it up
 
-## What Hermes does
+`scripts/install.sh` does all of this and asks before each part:
 
-- **Scanout on the session's card.** Gamescope renders on the real GPU and
-  scans out on the session's Hermes-KMS card (`-O` picks its connector).
-  Upstream cannot be told the two apart: it opens the primary node of the GPU
-  it renders with, which is the host's. Hermes runs `gamescope --help` (once
-  per binary, again when the file changes) and passes the session's card with
-  the option the build lists:
-  - `--prefer-drm` - [ValveSoftware/gamescope#2220](https://github.com/ValveSoftware/gamescope/pull/2220)
-    ([relil/gamescope-eGPU](https://github.com/relil/gamescope-eGPU)). The card
-    is also exported as `GAMESCOPE_PREFER_DRM`, which that patch reads too.
-  - `--drm-device` - the downstream patch from #57.
+1. Hermes-KMS, configured for your user with
+   `sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user <uid>`, and its
+   private seat brokers (`hermes-kms-seatd@N`) - which must run with
+   `SEATD_VTBOUND=0` (Hermes-KMS PR #16), or they put the host's VT into text
+   mode when a session ends.
+2. Hermes' Gamescope build (below), PipeWire with WirePlumber, and seatd.
+3. `cap_sys_admin,cap_mknod,cap_sys_chroot+p` on `/usr/bin/hermes` for a
+   private `/dev` (the packages in this branch set them).
+4. `hermes_kms_isolated_sessions = enabled` and
+   `virtual_display_backend = hermes_kms`.
 
-  A build that lists neither is refused, with an error saying why, rather than
-  started against the host's display. `HERMES_ISOLATED_GAMESCOPE_DRM_FLAG`
-  (`--prefer-drm`, `--drm-device` or `none`) skips the probe, for a build whose
-  usage text does not list its option; `none` reproduces what upstream does and
-  is only useful to see it fail.
-- **The card is per session.** It is the card Hermes created for that client,
-  so two sessions are two cards. `HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE` is no
-  longer read.
-- **Input seat.** Hermes sets `XDG_SEAT=hermes-kms-N`, and the session's
-  virtual devices carry that seat. Gamescope also gets
-  `WLR_LIBINPUT_NO_DEVICES=1`: the seat is empty until the stream starts and
-  creates the session's devices, and wlroots' libinput backend otherwise
-  refuses to start on it.
-- **Display environment.** Gamescope does not inherit the desktop's
-  `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`, `_WAYLAND_DISPLAY`, `DISPLAY` or
-  `HERMES_WAYLAND_DISPLAY`, so it cannot nest itself inside the desktop.
-- **Steam mode, per application.** The application setting *Gamescope Steam
-  mode* (`"gamescope-steam-mode": true` in `apps.json`) adds `-e` and a second
-  Xwayland server (`--xwayland-count 2`), as SteamOS runs `steam -gamepadui`.
-  `HERMES_ISOLATED_GAMESCOPE_STEAM_MODE=1` in the server's environment still
-  forces it on for every application.
-- **First frame.** The session has `first-frame-timeout` seconds (per
-  application; default 30 for application sessions, 5 for desktop sessions) to
-  attach a framebuffer to its card before the launch fails. Steam's gamepad UI
-  regularly needs far more than the old 5 seconds.
-- **No mouse nudge.** Isolated streams no longer move the mouse +1/-1 when
-  they start; in Gamescope that put a cursor in the middle of the gamepad UI.
-- **Audio on resume.** A resumed stream captures the session's own sink. It
-  used to take the host path and move the host's default sink.
+## Gamescope
 
-Hermes-KMS needs its own fix for the seat brokers: `hermes-kms-seatd@.service`
-must run seatd with `SEATD_VTBOUND=0`. VT-bound - seatd's default - each broker
-adopts the VT active on seat0 and switches it between graphics and text mode as
-sessions come and go, which is what put tty1 into text mode under a `startx`
-desktop in #57.
+Stock Gamescope cannot run these sessions:
 
-## What Gamescope needs
+- it scans out on the GPU it renders with - the host's display - instead of
+  the session's card;
+- its wlroots asks libseat for the seat, seatd always answers `seat0`, and
+  libinput reads the host's keyboard and mouse.
 
-Two things Hermes cannot do from outside:
+[MrOz59/gamescope](https://github.com/MrOz59/gamescope), branch `hermes`, is
+upstream `master` plus `--prefer-drm`
+([ValveSoftware/gamescope#2220](https://github.com/ValveSoftware/gamescope/pull/2220)),
+the libinput seat from `XDG_SEAT` and `wl_touch.frame` after passthrough touch
+(both from d3adb5). It installs into `/usr/lib/hermes-gamescope`, beside the
+distribution's Gamescope; a source build goes to `/opt/hermes-gamescope`.
 
-1. **A scanout selector** - #2220 or the #57 patch, above.
-2. **Reading input from the session seat.** Gamescope's wlroots asks libseat
-   which seat it is on, and seatd only ever answers `seat0`, so libinput is
-   pointed at the host's keyboard and mouse - they reach the game as well as
-   the desktop. The #57 patch makes Gamescope take its libinput seat from
-   `XDG_SEAT`, which Hermes already sets. This is the same limitation the
-   Hermes-KMS seat rule documents for wlroots compositors, and the counterpart
-   of weston's `--seat`. It has no upstream proposal yet.
+Hermes looks for Gamescope in those two prefixes first, then on `PATH`
+(`HERMES_GAMESCOPE` names a binary outright). It runs `gamescope --help` once
+per binary and passes the session's card with `--prefer-drm` or
+`--drm-device` (d3adb5's downstream patch), whichever the build lists, and
+exports it as `GAMESCOPE_PREFER_DRM`. A build with neither is refused rather
+than started against the host's display; `HERMES_ISOLATED_GAMESCOPE_DRM_FLAG`
+(`--prefer-drm`, `--drm-device` or `none`) skips the probe. From a prefix, the
+session's `PATH` starts with that build's `bin` (Gamescope finds
+`gamescopereaper` on `PATH`) and `VK_ADD_IMPLICIT_LAYER_PATH` points at its WSI
+layer.
 
-Without (1) a session does not start. Without (2) it starts, but host input
-leaks into it.
+## What a session gets
 
-## Settings at a glance
+- **Display.** Its own Hermes-KMS card; Gamescope never inherits the desktop's
+  `WAYLAND_DISPLAY` or `DISPLAY`.
+- **Input.** `XDG_SEAT=hermes-kms-N`; the client's virtual devices carry that
+  seat, and `WLR_LIBINPUT_NO_DEVICES=1` lets Gamescope start before they exist.
+  With a fixed gamepad type, the client's pads are plugged in when the stream
+  starts. `74-hermes-session-acl.rules` opens the seat's input and hidraw nodes
+  to the session user; Steam Input pads made inside a session take its seat.
+- **No stray cursor.** No +1/-1 mouse nudge, and the wiggle Moonlight-based
+  clients send on connect is dropped (`isolated_ignore_mouse_wiggle`).
+- **Audio.** Its own PipeWire and WirePlumber with no hardware: the session's
+  sink is its only device, and with `stream_mic` the client's microphone is
+  its only source. Without PipeWire it falls back to a sink on the host's
+  server. A resumed stream captures the session's sink.
+- **Devices.** `isolate-devices` gives it a private `/dev` (its own mount
+  namespace) with only its client's devices; `isolate-sound` removes
+  `/dev/snd`.
+- **Steam.** `stop-desktop-steam` shuts down a Steam running on the desktop
+  first, since Steam runs once per user. The host's Discord IPC sockets are
+  linked into the session's runtime directory.
 
-| Setting | Where | Effect |
+## Per-app settings
+
+| Setting | Values | Effect |
 | --- | --- | --- |
-| `gamescope-steam-mode` | app | `-e` and `--xwayland-count 2` |
-| `first-frame-timeout` | app | seconds to the first frame; `0` = default |
-| `HERMES_ISOLATED_GAMESCOPE_DRM_FLAG` | server env | force `--prefer-drm`, `--drm-device` or `none` |
-| `HERMES_ISOLATED_GAMESCOPE_STEAM_MODE=1` | server env | Steam mode for every app |
+| `gamescope-steam-mode` | `auto` / `on` / `off` | `-e` and a second Xwayland; `auto` when `cmd` runs `steam` |
+| `gamescope-args` | flags | replaces `--expose-wayland --force-windows-fullscreen` |
+| `first-frame-timeout` | seconds | time to the first frame; `0` = 30 s (application), 5 s (desktop) |
+| `isolate-devices` | `auto` / `on` / `off` | private `/dev`; `auto` when Hermes has the capabilities |
+| `isolate-sound` | `auto` / `on` / `off` | no `/dev/snd` |
+| `stop-desktop-steam` | `auto` / `on` / `off` | stop the desktop's Steam first; `auto` when `cmd` runs `steam` |
 
-Server environment variables go in the environment of the Hermes **server
-process**; restart Hermes after changing them.
+Server environment: `HERMES_GAMESCOPE`, `HERMES_ISOLATED_GAMESCOPE_DRM_FLAG`,
+and `HERMES_ISOLATED_GAMESCOPE_STEAM_MODE=1` (Steam mode for every app).
 
 ## Validation needed
 
-1. Desktop and session at once: physical keyboard/mouse only on the desktop,
-   client input only in the session (needs the Gamescope seat patch).
-2. With the patched Gamescope: confirm in its log that it scans out on the
-   session card and renders with the real GPU; check capture for CPU readbacks.
-3. With unpatched Gamescope: the launch must fail with the selector error and
-   leave the host's display alone.
-4. Steam mode with `steam -gamepadui`: overlay, no stray cursor, first frame
-   within the deadline. Leave it off for non-Steam applications.
-5. Disconnect and resume: the resumed stream carries the game's audio and the
-   desktop keeps its own.
-6. With the Hermes-KMS seatd fix installed: start and stop a session from a
-   `startx` desktop on tty1; tty1 must stay in graphics mode.
-
-## Not covered yet
-
-Reported in #57 and waiting on the patches promised there: moving streams that
-pick a sink by name (Unity) onto the session's sink, microphone forwarding
-(needs Artemis changes), attaching the gamepad when the stream starts, seat
-permissions for the session user, and sharing the host's Discord IPC socket
-with the session's runtime directory.
-
-The session runs as the host user with the host's `HOME`. Steam allows one
-instance per user, so a Steam client already running on the desktop is likely
-to take over a `steam -gamepadui` started in the session; this is untested.
+1. Desktop and session at once: physical input only on the desktop, client
+   input only in the session; host controllers absent from the session with
+   `isolate-devices`.
+2. libvirtualhid controllers inside a private `/dev`: the mirror finds UHID
+   devices by `HID_PHYS`; check event, js and hidraw nodes all appear.
+3. Gamescope from `/usr/lib/hermes-gamescope`: scanout on the session card,
+   rendering on the real GPU, and the WSI layer picked up from the prefix.
+4. Steam mode with `steam -gamepadui`: overlay, no stray cursor, first frame in
+   time, the desktop's Steam stopped and its settings saved.
+5. Audio and microphone: game audio only on the client, desktop audio
+   untouched, microphone only in the session; disconnect and resume.
+6. With the Hermes-KMS seatd fix: start and stop a session from a `startx`
+   desktop on tty1; tty1 stays in graphics mode.

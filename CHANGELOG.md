@@ -12,6 +12,35 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- `scripts/install.sh` installs Hermes from its GitHub releases on Arch,
+  CachyOS, Ubuntu and Fedora and asks about each optional piece: the
+  Hermes-KMS driver (built with DKMS, with `hermes-kms-setup` run for the
+  user), experimental isolated sessions with Hermes' Gamescope build, and
+  streaming the login screen (`hermes --prelogin enable`, the `input` group
+  and SDDM's Wayland greeter). `--dry-run` shows what it would do.
+- Same-user isolated sessions that keep out of the desktop's way, from
+  d3adb5's work in [#57]:
+  - each session runs its own PipeWire and WirePlumber, with no hardware and
+    its own sink as its only device, so streams that ignore `PULSE_SINK` or
+    pick the default sink by name stay in the session; without PipeWire it
+    falls back to a sink on the host's server;
+  - a client's microphone, sent with Apollo's microphone passthrough, becomes
+    the session's only source (`stream_mic`);
+  - `isolate-devices` and `isolate-sound` (per app, `auto`/`on`/`off`) give a
+    session a private `/dev` in its own mount namespace, holding only its
+    client's devices and the Steam Input pads made inside it, and no
+    `/dev/snd`; Hermes needs `cap_sys_admin,cap_mknod,cap_sys_chroot+p`, and
+    `auto` runs without isolation when they are missing;
+  - `stop-desktop-steam` (per app; `auto` when the command runs `steam`)
+    shuts down a Steam running on the desktop first, since Steam runs once
+    per user and hands a second launch to the running client;
+  - with a fixed gamepad type, the client's gamepads are plugged in when the
+    stream starts rather than on their first input;
+  - the host's Discord IPC sockets are linked into the session's runtime
+    directory, so Rich Presence works;
+  - `74-hermes-session-acl.rules` opens a session seat's input devices,
+    hidraw included, to the session user, and Steam Input pads made inside a
+    session take its seat instead of the desktop's.
 - Linux applications can now use a `Detached (preserve physical monitors)`
   virtual-display layout. On KDE/KScreen, Hermes enables and positions only the
   virtual output and does not issue layout changes for the physical outputs,
@@ -73,17 +102,27 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   session has a card of its own. Gamescope also starts with
   `WLR_LIBINPUT_NO_DEVICES=1`, because the session seat has no devices until
   the stream starts.
-- Applications gain two settings for isolated sessions: Gamescope Steam mode
-  (`gamescope-steam-mode`), which adds `-e` and a second Xwayland server for
-  `steam -gamepadui`, replacing the process-wide
-  `HERMES_ISOLATED_GAMESCOPE_STEAM_MODE` switch (still honoured as an
-  override); and `first-frame-timeout`, how long the session has to show its
-  first frame. The default for application sessions rises from 5 to 30
-  seconds, since Steam's gamepad UI regularly took longer and failed a launch
-  that was only slow ([#57]).
-- An isolated stream no longer nudges the mouse when it starts. The nudge
-  wakes damage-based capture, which an isolated session does not use, and in
-  Gamescope it put a cursor in the middle of Steam's gamepad UI ([#57]).
+- Isolated application sessions take three per-app settings ([#57], from
+  d3adb5): `gamescope-steam-mode` (`auto`, the default, turns on Gamescope's
+  Steam mode - `-e` and a second Xwayland - when the command runs `steam`;
+  `on`/`off` force it), `gamescope-args` (replaces the default
+  `--expose-wayland --force-windows-fullscreen`), and `first-frame-timeout`,
+  how long the session has to show its first frame. That default rises from
+  5 to 30 seconds for application sessions, since Steam's gamepad UI
+  regularly took longer and failed a launch that was only slow. The
+  process-wide `HERMES_ISOLATED_GAMESCOPE_STEAM_MODE` switch still forces
+  Steam mode on as an override.
+- Isolated sessions prefer Hermes' own Gamescope build
+  ([MrOz59/gamescope](https://github.com/MrOz59/gamescope), branch `hermes`),
+  installed beside the system's Gamescope in `/usr/lib/hermes-gamescope` (or
+  `/opt/hermes-gamescope` for a source build); `HERMES_GAMESCOPE` names a
+  binary outright. The session's `PATH` and `VK_ADD_IMPLICIT_LAYER_PATH` point
+  at that build's `gamescopereaper` and WSI layer.
+- An isolated stream no longer shows Gamescope's cursor when a client
+  connects ([#57], from d3adb5). Hermes no longer nudges the mouse for an
+  isolated session, and drops the +1/-1 wiggle Moonlight-based clients send
+  right after connecting when it is the session's first mouse input
+  (`isolated_ignore_mouse_wiggle`, on by default).
 - Linux gamepad backend policy is now configurable. Auto keeps Xbox controllers
   on uinput for ordinary rumble without hidraw access; native HID remains an
   explicit option for trigger rumble and battery. PlayStation/Switch retain
@@ -115,7 +154,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
-- Resuming an isolated session took the host's audio ([#57]). The stream
+- Resuming an isolated session took the host's audio ([#57], found by d3adb5
+  as well). The stream
   looked the session's sink up by its own launch id rather than the one the
   session was started with, found nothing, and took the host path, which
   moves the host's default sink onto the stream's virtual sink. A resumed
