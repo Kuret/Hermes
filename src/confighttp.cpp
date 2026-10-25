@@ -1549,7 +1549,10 @@ namespace confighttp {
       {"hestia_protocol", 1},
       {"min_client_protocol", 1},
       {"max_client_protocol", 1},
-      {"server_version", "0.1.0-hermes"},
+      // Same version the web UI and the log report (the VERSION file, plus
+      // the commit suffix on non-release branches), so clients show the
+      // Hermes version the user actually installed.
+      {"server_version", PROJECT_VERSION},
       {"compatibility", {
         {"gamestream", true},
         {"moonlight", true},

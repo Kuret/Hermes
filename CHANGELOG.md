@@ -75,6 +75,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- The Hestia `capabilities` endpoint reports the real Hermes version in
+  `server_version` (the same one the web UI shows, e.g. `0.6.0`) instead of a
+  fixed `0.1.0-hermes`, so Hestia clients display the installed version.
 - Hermes opens Hermes-KMS control/capture render nodes with `O_RDONLY`. Updated
   Hermes-KMS udev policy grants the active or configured consumer read-only
   access, which still permits every private capture ioctl and exported fd but
