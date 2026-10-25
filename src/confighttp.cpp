@@ -1778,7 +1778,10 @@ namespace confighttp {
       BOOST_LOG(debug) << "[HestiaAPI] session prepare requested: width=" << stream["requested_width"]
                        << " height=" << stream["requested_height"] << " fps=" << stream["requested_fps"]
                        << " virtual_display=" << virtual_display["enabled"]
-                       << " launch_mode=" << app["launch_mode"];
+                       << " launch_mode=" << app["launch_mode"]
+                       << " client_name=" << input["client"]["name"]
+                       << " client_version=" << input["client"]["version"]
+                       << " client_platform=" << input["client"]["platform"];
 
       const nlohmann::json output {
         {"ok", true},

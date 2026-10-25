@@ -7,6 +7,7 @@
 #include <fstream>
 #include <future>
 #include <queue>
+#include <system_error>
 
 // lib includes
 #include <boost/endian/arithmetic.hpp>
@@ -273,8 +274,8 @@ namespace stream {
 
   class control_server_t {
   public:
-    int bind(net::af_e address_family, std::uint16_t port) {
-      _host = net::host_create(address_family, _addr, port);
+    int bind(net::af_e address_family, std::uint16_t port, boost::system::error_code &ec) {
+      _host = net::host_create(address_family, _addr, port, &ec);
 
       return !(bool) _host;
     }
@@ -1840,20 +1841,26 @@ namespace stream {
     auto video_port = net::map_port(VIDEO_STREAM_PORT);
     auto audio_port = net::map_port(AUDIO_STREAM_PORT);
 
-    if (ctx.control_server.bind(address_family, control_port)) {
-      report_stream_start_failure(
-        "Port " + std::to_string(control_port) +
-        " is already in use, so the stream could not start. Another Hermes may still be running, or "
-        "another program has taken the port."
-      );
+    boost::system::error_code ec;
+    const auto report_bind_failure = [](const char *transport, std::uint16_t port, const boost::system::error_code &error) {
+      auto reason = std::string {"Could not initialize the "} + transport + " stream on UDP port " +
+                    std::to_string(port) + ": " + error.message() + " (" + error.category().name() +
+                    ':' + std::to_string(error.value()) + ").";
+      if (error == boost::asio::error::address_in_use) {
+        reason += " The port is already in use. Check which process holds it, including any remaining Hermes or helper process.";
+      }
+      report_stream_start_failure(reason);
+    };
+
+    if (ctx.control_server.bind(address_family, control_port, ec)) {
+      report_bind_failure("control", control_port, ec);
 
       return -1;
     }
 
-    boost::system::error_code ec;
     ctx.video_sock.open(protocol, ec);
     if (ec) {
-      BOOST_LOG(fatal) << "Couldn't open socket for Video server: "sv << ec.message();
+      report_bind_failure("video", video_port, ec);
 
       return -1;
     }
@@ -1867,38 +1874,45 @@ namespace stream {
 
     ctx.video_sock.bind(udp::endpoint(protocol, video_port), ec);
     if (ec) {
-      report_stream_start_failure(
-        "Port " + std::to_string(video_port) + " is already in use, so the stream could not start (" +
-        ec.message() + "). Another Hermes may still be running, or another program has taken the port."
-      );
+      report_bind_failure("video", video_port, ec);
 
       return -1;
     }
 
     ctx.audio_sock.open(protocol, ec);
     if (ec) {
-      BOOST_LOG(fatal) << "Couldn't open socket for Audio server: "sv << ec.message();
+      report_bind_failure("audio", audio_port, ec);
 
       return -1;
     }
 
     ctx.audio_sock.bind(udp::endpoint(protocol, audio_port), ec);
     if (ec) {
-      report_stream_start_failure(
-        "Port " + std::to_string(audio_port) + " is already in use, so the stream could not start (" +
-        ec.message() + "). Another Hermes may still be running, or another program has taken the port."
-      );
+      report_bind_failure("audio", audio_port, ec);
 
       return -1;
     }
 
     ctx.message_queue_queue = std::make_shared<message_queue_queue_t::element_type>(30);
 
-    ctx.video_thread = std::thread {videoBroadcastThread, std::ref(ctx.video_sock)};
-    ctx.audio_thread = std::thread {audioBroadcastThread, std::ref(ctx.audio_sock)};
-    ctx.control_thread = std::thread {controlBroadcastThread, &ctx.control_server};
+    // If a later thread cannot start, join the ones already created before
+    // shared_t destroys this partially initialized context.
+    auto rollback = util::fail_guard([&ctx]() {
+      end_broadcast(ctx);
+    });
+    try {
+      ctx.video_thread = std::thread {videoBroadcastThread, std::ref(ctx.video_sock)};
+      ctx.audio_thread = std::thread {audioBroadcastThread, std::ref(ctx.audio_sock)};
+      ctx.control_thread = std::thread {controlBroadcastThread, &ctx.control_server};
+      ctx.recv_thread = std::thread {recvThread, std::ref(ctx)};
+    } catch (const std::system_error &error) {
+      report_stream_start_failure(std::string {"Could not start streaming threads: "} + error.what());
+      return -1;
+    }
+    rollback.disable();
 
-    ctx.recv_thread = std::thread {recvThread, std::ref(ctx)};
+    BOOST_LOG(debug) << "Streaming transports ready: control=" << control_port
+                     << " video=" << video_port << " audio=" << audio_port;
 
     return 0;
   }
@@ -1918,21 +1932,34 @@ namespace stream {
     ctx.message_queue_queue->stop();
     ctx.io_context.stop();
 
-    ctx.video_sock.close();
-    ctx.audio_sock.close();
+    boost::system::error_code ec;
+    ctx.video_sock.close(ec);
+    ctx.audio_sock.close(ec);
 
     video_packets.reset();
     audio_packets.reset();
 
     BOOST_LOG(debug) << "Waiting for main listening thread to end..."sv;
-    ctx.recv_thread.join();
+    if (ctx.recv_thread.joinable()) {
+      ctx.recv_thread.join();
+    }
     BOOST_LOG(debug) << "Waiting for main video thread to end..."sv;
-    ctx.video_thread.join();
+    if (ctx.video_thread.joinable()) {
+      ctx.video_thread.join();
+    }
     BOOST_LOG(debug) << "Waiting for main audio thread to end..."sv;
-    ctx.audio_thread.join();
+    if (ctx.audio_thread.joinable()) {
+      ctx.audio_thread.join();
+    }
     BOOST_LOG(debug) << "Waiting for main control thread to end..."sv;
-    ctx.control_thread.join();
-    BOOST_LOG(debug) << "All broadcasting threads ended"sv;
+    if (ctx.control_thread.joinable()) {
+      ctx.control_thread.join();
+    }
+
+    // ENet must be released after its last user joins. Make socket cleanup
+    // explicit so this log describes released ports, not just stopped threads.
+    ctx.control_server._host.reset();
+    BOOST_LOG(debug) << "All broadcasting threads ended; streaming sockets released"sv;
 
     broadcast_shutdown_event->reset();
   }
