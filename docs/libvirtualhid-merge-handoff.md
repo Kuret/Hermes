@@ -1,8 +1,10 @@
 # Retomada: migração libvirtualhid antes do merge
 
-Checkpoint atualizado em 25/10/2026, Australia/Sydney, após a continuação e
-validação das branches experimentais. **Não fazer merge na
-main do Hermes nem alterar Hermes-KMS nesta retomada sem nova autorização.**
+Checkpoint histórico de 25/10/2026, Australia/Sydney. Em 26/10/2026 o mantenedor
+incluiu libvirtualhid, PyroWave e isolamento Gamescope na meta do próximo release.
+A integração atual está em `release/october-integration`; veja
+[os critérios de promoção e a homologação restante](october-release-integration.md).
+Os resultados abaixo preservam a evidência das rodadas anteriores.
 
 ## Biblioteca promovida; homologação do Hermes
 

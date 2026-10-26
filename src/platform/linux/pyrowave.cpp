@@ -23,6 +23,7 @@ extern "C" {
 // local includes
 #include "graphics.h"
 #include "pyrowave.h"
+#include "pyrowave_fence.h"
 #include "src/config.h"
 #include "src/logging.h"
 
@@ -363,14 +364,13 @@ namespace pyrowave {
           // Wait here instead: slower, but the frame is still complete. The
           // bound keeps a hung GPU from holding the encode thread forever.
           sync = nullptr;
-          pollfd pfd {fence_fd, POLLIN, 0};
-          int ready;
-          while ((ready = ::poll(&pfd, 1, 1000)) < 0 && errno == EINTR) {
-          }
-          if (ready == 0) {
-            BOOST_LOG(warning) << "[PyroWave] The conversion did not finish within a second; encoding the frame anyway."sv;
-          }
+          const bool ready = wait_for_conversion_fence(fence_fd, 1000ms);
           drop_fence();
+          if (!ready) {
+            converted = false;
+            BOOST_LOG(warning) << "[PyroWave] Conversion fence timed out or failed; dropping the frame."sv;
+            return false;
+          }
         }
       }
 
