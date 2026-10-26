@@ -7840,8 +7840,18 @@ namespace VDISPLAY {
     // A Hyprland headless output is switched by its monitor rule, whichever
     // backend is configured: hermes_kms may well be the one in config while the
     // session still lands here, as it is on a Hyprland desktop.
+    //
+    // Failing to switch is not a reason to end the session, unlike on KScreen.
+    // The capture asks the output for its encoding rather than trusting this
+    // switch: an HDR client on an output that stayed SDR streams SDR, and an
+    // SDR client never declares itself colour-aware, so Hyprland tone-maps an
+    // output that stayed HDR for it. Ending the session instead tears down a
+    // virtual output that exclusive mode has already left as the only one.
     if (const auto hyprland_output = getHyprlandOutputName(displayName); !hyprland_output.empty()) {
-      return hyprland::set_output_hdr(hyprland_output, hdr);
+      if (!hyprland::set_output_hdr(hyprland_output, hdr)) {
+        BOOST_LOG(warning) << "[VDISPLAY/Hyprland] Continuing with " << hyprland_output << " as it is; the stream follows its actual encoding.";
+      }
+      return true;
     }
     if (config::video.virtual_display_backend != "hermes_kms" ||
         window_system != window_system_e::WAYLAND || !kscreen::is_active(displayName)) {
