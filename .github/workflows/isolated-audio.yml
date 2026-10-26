@@ -2,7 +2,7 @@ name: Private session audio
 
 on:
   push:
-    branches: [experimental/isolated-session-improvements, main]
+    branches: [experimental/isolated-session-improvements, release/october-integration, main]
     paths:
       - 'src/platform/linux/session_audio.*'
       - 'src/platform/linux/audio.cpp'

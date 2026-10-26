@@ -2,7 +2,7 @@ name: Network lifecycle regressions
 
 on:
   push:
-    branches: [main, master, fix/issue-71-stream-reconnect, experimental/isolated-session-improvements]
+    branches: [main, master, fix/issue-71-stream-reconnect, experimental/isolated-session-improvements, release/october-integration]
     paths:
       - 'src/network.*'
       - 'src/thread_safe.h'

@@ -940,6 +940,10 @@ namespace rtsp_stream {
       ss << "a=rtpmap:98 AV1/90000"sv << std::endl;
     }
 
+    if (config::video.pyrowave && video::pyrowave_available()) {
+      ss << "a=rtpmap:98 PYROWAVE/90000"sv << std::endl;
+    }
+
     if (!session.surround_params.empty()) {
       // If we have our own surround parameters, advertise them twice first
       ss << "a=fmtp:97 surround-params="sv << session.surround_params << std::endl;
@@ -1288,6 +1292,22 @@ namespace rtsp_stream {
       return;
     }
 
+    if (config.monitor.videoFormat == video::PYROWAVE_VIDEO_FORMAT &&
+        (!config::video.pyrowave || !video::pyrowave_available())) {
+      BOOST_LOG(warning) << "PyroWave is unavailable, yet the client requested PyroWave"sv;
+
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
+    if (config.monitor.videoFormat == video::PYROWAVE_VIDEO_FORMAT &&
+        (config.monitor.dynamicRange != 0 || config.monitor.chromaSamplingType != 0)) {
+      BOOST_LOG(warning) << "PyroWave currently supports only 8-bit YUV 4:2:0 streams"sv;
+
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
     // Check that any required encryption is enabled
     auto encryption_mode = net::encryption_mode_for_address(sock.remote_endpoint().address());
     if (encryption_mode == config::ENCRYPTION_MODE_MANDATORY &&
@@ -1427,3 +1447,4 @@ namespace rtsp_stream {
                      << "---End MessageBuffer---"sv << std::endl;
   }
 }  // namespace rtsp_stream
+
