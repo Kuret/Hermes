@@ -24,7 +24,7 @@ Download the RC2 package matching your distribution.
 **Fedora 44:**
 
 ```bash
-sudo dnf install ./hermes-0.6.0+rc2.*-1.fc44.x86_64.rpm
+sudo dnf install ./hermes-0.6.0+*rc2.*-1.fc44.x86_64.rpm
 ```
 
 For Fedora 43, select the `fc43` package instead.
@@ -32,7 +32,7 @@ For Fedora 43, select the `fc43` package instead.
 **Ubuntu 24.04:**
 
 ```bash
-sudo apt install ./hermes_0.6.0+rc2.*_ubuntu24.04_amd64.deb
+sudo apt install ./hermes_0.6.0+*rc2.*_ubuntu24.04_amd64.deb
 ```
 
 For Ubuntu 26.04, select the `ubuntu26.04` package instead.

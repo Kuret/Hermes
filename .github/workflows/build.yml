@@ -68,9 +68,12 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             build_version="${version}"
           elif [[ "${GITHUB_REF_NAME}" =~ ^release/[a-z]+-[0-9]{4}-rc([0-9]+)$ ]]; then
-            # RC1 used a commit-only suffix. An explicit rcN suffix sorts after
-            # hexadecimal hashes, so package managers can upgrade to this RC.
-            build_version="${version}+rc${BASH_REMATCH[1]}.${GITHUB_SHA:0:7}"
+            # RPM/ALPM sort numeric segments above alpha segments. A numeric
+            # source date sorts after RC1's seven-character hexadecimal suffix
+            # on all three package managers; use the commit date for repeatability.
+            rc_number="${BASH_REMATCH[1]}"
+            source_date="$(git show -s --format=%cs HEAD | tr -d '-')"
+            build_version="${version}+${source_date}.rc${rc_number}.${GITHUB_SHA:0:7}"
           else
             build_version="${version}+${GITHUB_SHA:0:7}"
           fi
@@ -431,6 +434,12 @@ jobs:
       # makepkg cannot take pkgver from the environment, so rewrite it in the
       # CI checkout. This keeps the package filename, the pacman version and
       # the version the binary reports all in agreement.
+      - name: Check candidate upgrade ordering
+        run: |
+          case "$BRANCH" in
+            release/*-rc*) test "$(vercmp "$BUILD_VERSION" '0.6.0+964c5fa')" -gt 0 ;;
+          esac
+
       - name: Stamp the build version into the PKGBUILD
         run: |
           sed -i "s/^pkgver=.*/pkgver=${BUILD_VERSION}/" PKGBUILD
@@ -567,6 +576,12 @@ jobs:
       # which went EOL in April 2025, while 26.04 ships 22. Pinning one version
       # keeps both packages' Web UI built by the same toolchain - the same major
       # the Fedora containers provide.
+      - name: Check candidate upgrade ordering
+        run: |
+          case "$BRANCH" in
+            release/*-rc*) dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+964c5fa' ;;
+          esac
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -797,6 +812,12 @@ jobs:
             wget \
             nodejs \
             npm
+
+      - name: Check candidate upgrade ordering
+        run: |
+          case "$BRANCH" in
+            release/*-rc*) test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+964c5fa'))}")" -gt 0 ;;
+          esac
 
       - name: Checkout
         uses: actions/checkout@v4
