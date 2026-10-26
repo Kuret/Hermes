@@ -1870,9 +1870,9 @@ namespace video {
       const pyrowave_gpu_sync_operation *acquire = nullptr;
       const pyrowave_gpu_sync_operation *release = nullptr;
       if (!session.gpu.device->planes(buffers, acquire, release)) {
-        BOOST_LOG(error) << "PyroWave has no converted frame to encode"sv;
+        BOOST_LOG(warning) << "PyroWave conversion is not ready; skipping this independent frame"sv;
         metrics_record_drop();
-        return -1;
+        return 0;
       }
       encoded = pyrowave_encoder_encode_gpu_synchronous(session.pyrowave_encoder_handle, acquire, release, &buffers, &rate_control);
     } else
