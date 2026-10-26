@@ -182,14 +182,24 @@ jobs:
     steps:
       - name: Install Linux build dependencies
         run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed \
-            base-devel git cmake ninja boost openssl opus ffmpeg \
-            libdrm wayland libx11 libxrandr libxfixes libxcb \
-            libxi libxtst libxss libxcursor libxkbcommon wayland-protocols \
-            libva libvdpau libcap curl libevdev libinput sdl2 systemd \
-            miniupnpc libpulse qt6-base qt6-svg npm nodejs \
-            icu numactl acl util-linux pipewire pipewire-pulse wireplumber
+          # A transient mirror download must not discard a full compiler run.
+          # Refresh/upgrade and install in one transaction, with a bounded retry.
+          for attempt in 1 2 3; do
+            if pacman -Syu --noconfirm --needed \
+              base-devel git cmake ninja boost openssl opus ffmpeg \
+              libdrm wayland libx11 libxrandr libxfixes libxcb \
+              libxi libxtst libxss libxcursor libxkbcommon wayland-protocols \
+              libva libvdpau libcap curl libevdev libinput sdl2 systemd \
+              miniupnpc libpulse qt6-base qt6-svg npm nodejs \
+              icu numactl acl util-linux pipewire pipewire-pulse wireplumber; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then
+              exit 1
+            fi
+            echo "::warning::Arch mirror download failed; refreshing and retrying ($attempt/3)"
+            sleep 5
+          done
 
       - name: Checkout Hermes
         uses: actions/checkout@v4

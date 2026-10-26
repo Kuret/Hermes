@@ -11,10 +11,7 @@
 #endif
 
 #ifdef __linux__
-  #include <csignal>
-  #include <spawn.h>
-  #include <sys/wait.h>
-  #include <unistd.h>
+  #include "../helpers/executed_helper.h"
 #endif
 
 namespace {
@@ -229,15 +226,9 @@ TEST_P(HostCreateTest, VideoAndAudioPortsAreReleasedWhileAnExecutedHelperLives) 
     EXPECT_NE(fcntl(sockets[i]->native_handle(), F_GETFD) & FD_CLOEXEC, 0);
   }
 
-  pid_t child;
-  char program[] = "/bin/sleep";
-  char duration[] = "30";
-  char *arguments[] = {program, duration, nullptr};
-  ASSERT_EQ(posix_spawn(&child, program, nullptr, nullptr, arguments, environ), 0);
-  auto cleanup = util::fail_guard([child]() {
-    kill(child, SIGTERM);
-    while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
-  });
+  test::executed_helper_t helper;
+  ASSERT_EQ(helper.start(), 0);
+  ASSERT_TRUE(helper.running());
 
   video.close();
   audio.close();
@@ -259,21 +250,37 @@ TEST_P(HostCreateTest, AnExecutedHelperDoesNotKeepTheControlPortAlive) {
   const auto port = bound_port(*host);
   ASSERT_NE(port, 0);
 
-  pid_t child;
-  char program[] = "/bin/sleep";
-  char duration[] = "30";
-  char *arguments[] = {program, duration, nullptr};
-  ASSERT_EQ(posix_spawn(&child, program, nullptr, nullptr, arguments, environ), 0);
-  auto cleanup = util::fail_guard([child]() {
-    kill(child, SIGTERM);
-    while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
-  });
+  test::executed_helper_t helper;
+  ASSERT_EQ(helper.start(), 0);
+  ASSERT_TRUE(helper.running());
 
   // The helper is still alive, but releasing Hermes' host must free the port.
   host.reset();
   boost::system::error_code error;
   auto retry = net::host_create(GetParam(), address, port, &error);
   EXPECT_TRUE(static_cast<bool>(retry)) << error.message();
+}
+
+TEST_P(HostCreateTest, ExecutedHelperWithAnInheritedControlSocketStillHoldsThePort) {
+  ENetAddress address {};
+  auto host = net::host_create(GetParam(), address, 0);
+  if (!host) {
+    GTEST_SKIP() << "address family unavailable";
+  }
+  const auto port = bound_port(*host);
+  ASSERT_NE(port, 0);
+  const int flags = fcntl(host->socket, F_GETFD);
+  ASSERT_NE(flags, -1);
+  // Negative control: the exec acknowledgement must not hide a real leak.
+  ASSERT_EQ(fcntl(host->socket, F_SETFD, flags & ~FD_CLOEXEC), 0);
+  test::executed_helper_t helper;
+  ASSERT_EQ(helper.start(), 0);
+  ASSERT_TRUE(helper.running());
+  host.reset();
+  boost::system::error_code error;
+  auto retry = net::host_create(GetParam(), address, port, &error);
+  EXPECT_FALSE(static_cast<bool>(retry));
+  EXPECT_EQ(error, boost::asio::error::address_in_use);
 }
 #endif
 
@@ -318,3 +325,4 @@ TEST(NetworkStartupRollbackTest, FailedSharedInitializationReleasesAnAcquiredPor
   EXPECT_TRUE(net::udp_port_available(net::IPV4, port));
   EXPECT_EQ(shutdowns, 1);
 }
+
