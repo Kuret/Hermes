@@ -7,10 +7,14 @@
 // standard includes
 #include <bitset>
 #include <cstdint>
+#include <array>
 #include <map>
+#include <memory>
+#include <optional>
 #include <vector>
 
 #ifdef SUNSHINE_BUILD_WAYLAND
+  #include <color-management-v1.h>
   #include <ext-image-capture-source-v1.h>
   #include <ext-image-copy-capture-v1.h>
   #include <linux-dmabuf-unstable-v1.h>
@@ -175,6 +179,100 @@ namespace wl {
     bool y_invert {false};
   };
 
+  /**
+   * @brief What an output's image description says about how it is encoded.
+   *
+   * This is the information the color-management protocol delivers, kept as the
+   * protocol states it - xy chromaticities times 1,000,000, minimum luminance
+   * times 10,000, everything else in cd/m^2 - so that nothing is converted
+   * before it has to be. Every member is optional because the protocol lets a
+   * compositor leave out whatever it cannot describe; hdr_metadata_from_color_info()
+   * decides what to do about the gaps.
+   */
+  struct color_info_t {
+    using chromaticities_t = std::array<std::int32_t, 8>;  ///< r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y
+
+    std::optional<std::uint32_t> transfer_function;  ///< wp_color_manager_v1.transfer_function
+    std::optional<std::uint32_t> primaries_named;  ///< wp_color_manager_v1.primaries
+    std::optional<chromaticities_t> primaries;  ///< The primary colour volume, how the colour is encoded.
+    std::optional<chromaticities_t> target_primaries;  ///< The target colour volume, what can actually be shown.
+    std::optional<std::uint32_t> min_lum;  ///< Primary volume minimum, cd/m^2 * 10000.
+    std::optional<std::uint32_t> max_lum;  ///< Primary volume maximum, cd/m^2.
+    std::optional<std::uint32_t> target_min_lum;  ///< Target volume minimum, cd/m^2 * 10000.
+    std::optional<std::uint32_t> target_max_lum;  ///< Target volume maximum, cd/m^2.
+    std::optional<std::uint32_t> target_max_cll;  ///< cd/m^2
+    std::optional<std::uint32_t> target_max_fall;  ///< cd/m^2
+
+    /// Whether the compositor has finished describing; set by the protocol's done event.
+    bool done {false};
+    /// Whether the compositor refused to describe the output at all.
+    bool failed {false};
+
+    /// Whether the output is encoding SMPTE ST 2084 PQ, i.e. is in HDR.
+    bool pq() const {
+      return transfer_function && *transfer_function == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
+    }
+
+    /// Whether two descriptions encode alike; ignores done/failed, which are bookkeeping.
+    bool same_encoding(const color_info_t &other) const {
+      return transfer_function == other.transfer_function && primaries_named == other.primaries_named &&
+             primaries == other.primaries && target_primaries == other.target_primaries && min_lum == other.min_lum &&
+             max_lum == other.max_lum && target_min_lum == other.target_min_lum &&
+             target_max_lum == other.target_max_lum && target_max_cll == other.target_max_cll &&
+             target_max_fall == other.target_max_fall;
+    }
+  };
+
+  /**
+   * @brief An output's image description, kept current for as long as it lives.
+   *
+   * Asking for the description is a chain of three round trips - the output
+   * hands out a description object, which becomes ready, which is then asked for
+   * its information - so nothing is known right after listen(); settled() says
+   * when it is. A description is immutable, so a change to the output arrives as
+   * an event and is answered by fetching a new one, which is compared with the
+   * first: only a description that encodes differently counts as a change,
+   * because a compositor is free to announce one that does not.
+   */
+  class color_output_t {
+  public:
+    color_output_t();
+    ~color_output_t();
+
+    color_output_t(color_output_t &&) = delete;
+    color_output_t(const color_output_t &) = delete;
+    color_output_t &operator=(const color_output_t &) = delete;
+    color_output_t &operator=(color_output_t &&) = delete;
+
+    /// Start describing an output. The manager must outlive this object.
+    void listen(wp_color_manager_v1 *manager, wl_output *output);
+
+    /// Whether the first description has arrived, or been refused.
+    bool settled() const;
+
+    /// The description the output had when this was settled.
+    const color_info_t &encoding() const;
+
+    /// Whether the output has since been described as encoding differently.
+    bool changed() const {
+      return changed_;
+    }
+
+    void description_changed();
+
+  private:
+    struct fetch_t;
+
+    void start_fetch(std::unique_ptr<fetch_t> &slot);
+    void fetch_done(fetch_t *fetch);
+
+    wp_color_manager_v1 *manager {nullptr};
+    wp_color_management_output_v1 *output {nullptr};
+    std::unique_ptr<fetch_t> current;
+    std::unique_ptr<fetch_t> pending;
+    bool changed_ {false};
+  };
+
   class monitor_t {
   public:
     explicit monitor_t(wl_output *output);
@@ -224,6 +322,7 @@ namespace wl {
       LINUX_DMABUF,  ///< linux-dmabuf protocol
       IMAGE_COPY_CAPTURE,  ///< ext-image-copy-capture manager
       IMAGE_CAPTURE_SOURCE,  ///< ext-image-capture-source manager, names an output as a source
+      COLOR_MANAGEMENT,  ///< color-management manager, describes how an output is encoded
       MAX_INTERFACES,  ///< Maximum number of interfaces
     };
 
@@ -246,6 +345,21 @@ namespace wl {
     zxdg_output_manager_v1 *output_manager {nullptr};
     ext_image_copy_capture_manager_v1 *image_copy_capture_manager {nullptr};
     ext_output_image_capture_source_manager_v1 *image_capture_source_manager {nullptr};
+    /**
+     * Whether listen() should bind color-management when it is offered. Off by
+     * default, so that only a capture that asked for it becomes colour-aware.
+     * Set before listen(): the registry announces globals during the first
+     * roundtrip and a global that went by unbound is not offered again.
+     */
+    bool bind_color_manager {false};
+    /**
+     * Bound only when bind_color_manager says so, and then never released while
+     * the connection lives: a compositor decides whether to hand a client the
+     * output's own encoding or a tone-mapped sRGB copy by whether that client
+     * has bound this, so letting go of it would quietly change what the capture
+     * contains.
+     */
+    wp_color_manager_v1 *color_manager {nullptr};
 
   private:
     void add_interface(wl_registry *registry, std::uint32_t id, const char *interface, std::uint32_t version);

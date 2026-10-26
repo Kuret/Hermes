@@ -596,6 +596,176 @@ namespace wl {
     wl_output_add_listener(output, &wl_listener, this);
   }
 
+  /**
+   * One description of an output, from the request that asked for it until its
+   * information has all arrived. Owns the protocol objects so that dropping a
+   * fetch that is still in flight cancels it.
+   */
+  struct color_output_t::fetch_t {
+    color_output_t *owner;
+    wp_image_description_v1 *description {nullptr};
+    wp_image_description_info_v1 *information {nullptr};
+    color_info_t data;
+
+    explicit fetch_t(color_output_t *owner):
+        owner {owner} {
+    }
+
+    ~fetch_t() {
+      if (information) {
+        wp_image_description_info_v1_destroy(information);
+      }
+      if (description) {
+        wp_image_description_v1_destroy(description);
+      }
+    }
+
+    fetch_t(const fetch_t &) = delete;
+    fetch_t &operator=(const fetch_t &) = delete;
+
+    void failed(std::uint32_t cause, const char *message) {
+      BOOST_LOG(warning) << "Wayland compositor could not describe the output's colour: "sv << message << " (cause "sv << cause << ')';
+      data.failed = true;
+      data.done = true;
+      owner->fetch_done(this);
+    }
+
+    void ready() {
+      // A description is only allowed to be asked for information once, and
+      // both ready events mean the same thing here; the identity they carry is
+      // only for comparing descriptions, which same_encoding() does by content.
+      if (information) {
+        return;
+      }
+      information = wp_image_description_v1_get_information(description);
+      wp_image_description_info_v1_add_listener(information, &info_listener, this);
+    }
+
+    void finished() {
+      // "done" destroys the object on the compositor's side; the proxy is ours
+      // to release.
+      wp_image_description_info_v1_destroy(information);
+      information = nullptr;
+      data.done = true;
+      owner->fetch_done(this);
+    }
+
+    static const wp_image_description_v1_listener description_listener;
+    static const wp_image_description_info_v1_listener info_listener;
+  };
+
+  const wp_image_description_v1_listener color_output_t::fetch_t::description_listener = {
+    .failed = [](void *data, wp_image_description_v1 *, std::uint32_t cause, const char *msg) {
+      static_cast<fetch_t *>(data)->failed(cause, msg);
+    },
+    .ready = [](void *data, wp_image_description_v1 *, std::uint32_t) {
+      static_cast<fetch_t *>(data)->ready();
+    },
+    .ready2 = [](void *data, wp_image_description_v1 *, std::uint32_t, std::uint32_t) {
+      static_cast<fetch_t *>(data)->ready();
+    },
+  };
+
+  const wp_image_description_info_v1_listener color_output_t::fetch_t::info_listener = {
+    .done = [](void *data, wp_image_description_info_v1 *) {
+      static_cast<fetch_t *>(data)->finished();
+    },
+    // An ICC profile arrives as a file descriptor that is ours to close; the
+    // parametric values below are all that is read.
+    .icc_file = [](void *, wp_image_description_info_v1 *, std::int32_t fd, std::uint32_t) {
+      ::close(fd);
+    },
+    .primaries = [](void *data, wp_image_description_info_v1 *, std::int32_t r_x, std::int32_t r_y, std::int32_t g_x, std::int32_t g_y, std::int32_t b_x, std::int32_t b_y, std::int32_t w_x, std::int32_t w_y) {
+      static_cast<fetch_t *>(data)->data.primaries = color_info_t::chromaticities_t {r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y};
+    },
+    .primaries_named = [](void *data, wp_image_description_info_v1 *, std::uint32_t primaries) {
+      static_cast<fetch_t *>(data)->data.primaries_named = primaries;
+    },
+    .tf_power = [](void *, wp_image_description_info_v1 *, std::uint32_t) {},
+    .tf_named = [](void *data, wp_image_description_info_v1 *, std::uint32_t tf) {
+      static_cast<fetch_t *>(data)->data.transfer_function = tf;
+    },
+    .luminances = [](void *data, wp_image_description_info_v1 *, std::uint32_t min_lum, std::uint32_t max_lum, std::uint32_t) {
+      static_cast<fetch_t *>(data)->data.min_lum = min_lum;
+      static_cast<fetch_t *>(data)->data.max_lum = max_lum;
+    },
+    .target_primaries = [](void *data, wp_image_description_info_v1 *, std::int32_t r_x, std::int32_t r_y, std::int32_t g_x, std::int32_t g_y, std::int32_t b_x, std::int32_t b_y, std::int32_t w_x, std::int32_t w_y) {
+      static_cast<fetch_t *>(data)->data.target_primaries = color_info_t::chromaticities_t {r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y};
+    },
+    .target_luminance = [](void *data, wp_image_description_info_v1 *, std::uint32_t min_lum, std::uint32_t max_lum) {
+      static_cast<fetch_t *>(data)->data.target_min_lum = min_lum;
+      static_cast<fetch_t *>(data)->data.target_max_lum = max_lum;
+    },
+    .target_max_cll = [](void *data, wp_image_description_info_v1 *, std::uint32_t max_cll) {
+      static_cast<fetch_t *>(data)->data.target_max_cll = max_cll;
+    },
+    .target_max_fall = [](void *data, wp_image_description_info_v1 *, std::uint32_t max_fall) {
+      static_cast<fetch_t *>(data)->data.target_max_fall = max_fall;
+    },
+  };
+
+  color_output_t::color_output_t() = default;
+
+  color_output_t::~color_output_t() {
+    // Fetches release their own objects; the output object is released last so
+    // nothing it created outlives it.
+    pending.reset();
+    current.reset();
+    if (output) {
+      wp_color_management_output_v1_destroy(output);
+    }
+  }
+
+  void color_output_t::listen(wp_color_manager_v1 *manager, wl_output *wl_output) {
+    this->manager = manager;
+    output = wp_color_manager_v1_get_output(manager, wl_output);
+
+    static const wp_color_management_output_v1_listener output_listener = {
+      .image_description_changed = [](void *data, wp_color_management_output_v1 *) {
+        static_cast<color_output_t *>(data)->description_changed();
+      },
+    };
+    wp_color_management_output_v1_add_listener(output, &output_listener, this);
+
+    start_fetch(current);
+  }
+
+  void color_output_t::start_fetch(std::unique_ptr<fetch_t> &slot) {
+    slot = std::make_unique<fetch_t>(this);
+    slot->description = wp_color_management_output_v1_get_image_description(output);
+    wp_image_description_v1_add_listener(slot->description, &fetch_t::description_listener, slot.get());
+  }
+
+  bool color_output_t::settled() const {
+    return !current || current->data.done;
+  }
+
+  const color_info_t &color_output_t::encoding() const {
+    static const color_info_t none {};
+    return current ? current->data : none;
+  }
+
+  void color_output_t::description_changed() {
+    BOOST_LOG(debug) << "Wayland output image description changed"sv;
+    if (!current || !current->data.done) {
+      // Still waiting for the first one; asking again would only race it.
+      return;
+    }
+    start_fetch(pending);
+  }
+
+  void color_output_t::fetch_done(fetch_t *fetch) {
+    if (fetch != pending.get()) {
+      return;
+    }
+    if (!fetch->data.failed && !fetch->data.same_encoding(current->data)) {
+      BOOST_LOG(info) << "Wayland output now encodes differently ("sv
+                      << (fetch->data.pq() ? "PQ"sv : "not PQ"sv) << ", was "sv << (current->data.pq() ? "PQ"sv : "not PQ"sv) << ')';
+      changed_ = true;
+    }
+    pending.reset();
+  }
+
   interface_t::interface_t() noexcept
       :
       screencopy_manager {nullptr},
@@ -654,6 +824,22 @@ namespace wl {
       image_capture_source_manager = (ext_output_image_capture_source_manager_v1 *) wl_registry_bind(registry, id, &ext_output_image_capture_source_manager_v1_interface, 1);
 
       this->interface[IMAGE_CAPTURE_SOURCE] = true;
+    } else if (!std::strcmp(interface, wp_color_manager_v1_interface.name)) {
+      BOOST_LOG(info) << "Found interface: "sv << interface << '(' << id << ") version "sv << version;
+      // Offered is not the same as wanted. Binding is what tells the compositor
+      // this client understands colour, and a compositor that can run an output
+      // in HDR answers that by delivering the output's own PQ encoding instead
+      // of a copy it tone-maps to sRGB. A capture that cannot use PQ must not
+      // ask for it, so the bind waits for the caller to say it is wanted.
+      //
+      // Never bind a version newer than the generated code knows about. Version
+      // 1 is enough for everything used here; 2 and 3 only change which of two
+      // events announces a ready description, and color_output_t takes both.
+      if (bind_color_manager) {
+        color_manager = (wp_color_manager_v1 *) wl_registry_bind(registry, id, &wp_color_manager_v1_interface, std::min<std::uint32_t>(version, wp_color_manager_v1_interface.version));
+
+        this->interface[COLOR_MANAGEMENT] = true;
+      }
     }
   }
 
