@@ -40,6 +40,7 @@ makedepends=(
   'git-lfs'
   'nodejs'
   'npm'
+  'vulkan-headers'
 )
 
 optdepends=(
