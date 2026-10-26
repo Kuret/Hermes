@@ -3,7 +3,7 @@ name: Build Hermes
 on:
   push:
     # Build test packages for #71; release/nightly jobs remain gated below.
-    branches: [master, main, fix/issue-71-stream-reconnect]
+    branches: [master, main, fix/issue-71-stream-reconnect, feature/pyrowave-codec, release/october-integration]
     tags:
       - 'v*'
   pull_request:
@@ -112,6 +112,8 @@ jobs:
             numactl \
             xorg-server-xvfb \
             sway \
+            vulkan-headers \
+            vulkan-icd-loader \
             jq
 
       - name: Checkout
@@ -123,6 +125,9 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
+      - name: Build pinned PyroWave SDK
+        run: bash scripts/build-pyrowave-sdk.sh
+
       - name: Configure CMake (with tests)
         run: |
           cmake -B build -G Ninja \
@@ -132,7 +137,8 @@ jobs:
             -DSUNSHINE_ENABLE_X11=ON \
             -DSUNSHINE_ENABLE_DRM=ON \
             -DSUNSHINE_ENABLE_CUDA=OFF \
-            -DBUILD_TESTS=ON
+            -DBUILD_TESTS=ON \
+            -DSUNSHINE_REQUIRE_PYROWAVE=ON
 
       - name: Build tests
         run: cmake --build build --target test_sunshine -j$(nproc)
@@ -519,6 +525,7 @@ jobs:
             libswscale-dev \
             libdrm-dev \
             libgbm-dev \
+            libvulkan-dev \
             libwayland-dev \
             libx11-dev \
             libxrandr-dev \
@@ -573,6 +580,9 @@ jobs:
           echo "CUDAHOSTCXX=${host_cxx}" >> "${GITHUB_ENV}"
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
+      - name: Build pinned PyroWave SDK
+        run: bash scripts/build-pyrowave-sdk.sh
+
       - name: Configure CMake
         run: |
           # SUNSHINE_ASSETS_DIR is baked into the binary at compile time and must
@@ -586,7 +596,9 @@ jobs:
             -DSUNSHINE_ENABLE_WAYLAND=ON \
             -DSUNSHINE_ENABLE_X11=ON \
             -DSUNSHINE_ENABLE_DRM=ON \
-            -DCUDA_FAIL_ON_MISSING=ON
+            -DCUDA_FAIL_ON_MISSING=ON \
+            -DSUNSHINE_REQUIRE_PYROWAVE=ON \
+            -DSUNSHINE_BUNDLE_PYROWAVE=ON
 
       - name: Build
         run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(nproc)
@@ -618,11 +630,12 @@ jobs:
           # dpkg-shlibdeps reads debian/control for the package name, so give it
           # a throwaway one rather than a full debian/ source tree.
           BIN_PATH="$(readlink -f "${PKGDIR}/usr/bin/hermes")"
+          CODEC_LIB_PATH="$(readlink -f "${PKGDIR}/usr/lib/hermes")"
           mkdir -p .shlibdeps/debian
           printf 'Source: hermes\nPackage: hermes\nArchitecture: amd64\n' \
             > .shlibdeps/debian/control
           DEB_DEPENDS="$(cd .shlibdeps \
-            && dpkg-shlibdeps -O --ignore-missing-info "${BIN_PATH}" \
+            && dpkg-shlibdeps -O --ignore-missing-info -l"${CODEC_LIB_PATH}" "${BIN_PATH}" \
             | sed 's/^shlibs:Depends=//')"
           rm -rf .shlibdeps
           if [ -z "${DEB_DEPENDS}" ]; then
@@ -727,6 +740,8 @@ jobs:
             ffmpeg-free-devel \
             libdrm-devel \
             mesa-libgbm-devel \
+            vulkan-headers \
+            vulkan-loader-devel \
             wayland-devel \
             libX11-devel \
             libXrandr-devel \
@@ -772,6 +787,9 @@ jobs:
           echo "CUDAHOSTCXX=${host_cxx}" >> "${GITHUB_ENV}"
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
+      - name: Build pinned PyroWave SDK
+        run: bash scripts/build-pyrowave-sdk.sh
+
       - name: Configure CMake
         run: |
           # Must match where the RPM installs the assets (/usr/share/hermes);
@@ -783,7 +801,9 @@ jobs:
             -DSUNSHINE_ENABLE_WAYLAND=ON \
             -DSUNSHINE_ENABLE_X11=ON \
             -DSUNSHINE_ENABLE_DRM=ON \
-            -DCUDA_FAIL_ON_MISSING=ON
+            -DCUDA_FAIL_ON_MISSING=ON \
+            -DSUNSHINE_REQUIRE_PYROWAVE=ON \
+            -DSUNSHINE_BUNDLE_PYROWAVE=ON
 
       - name: Build
         run: cmake --build build -j$(nproc)
