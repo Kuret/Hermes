@@ -762,12 +762,7 @@ namespace VDISPLAY {
         BOOST_LOG(warning) << "[VDISPLAY] Refusing to pin a Hyprland monitor rule for an unsafe output name.";
         return;
       }
-      std::string mode = std::to_string(width) + "x" + std::to_string(height);
-      if (refresh_mhz > 0) {
-        char refresh[32];
-        std::snprintf(refresh, sizeof(refresh), "@%.3f", refresh_mhz / 1000.0);
-        mode += refresh;
-      }
+      const std::string mode = hyprlandModeString(width, height, refresh_mhz);
 
       std::string rule = "hl.monitor({ output = \"" + name + "\", mode = \"" + mode + "\", position = \"auto\", scale = 1 })";
       auto reply = request("/eval " + rule);
@@ -7474,6 +7469,17 @@ namespace VDISPLAY {
       }
     }
     return virtual_display_layout_e::extend;
+  }
+
+  std::string hyprlandModeString(int width, int height, int refresh_mhz) {
+    std::string mode = std::to_string(width) + "x" + std::to_string(height);
+    if (refresh_mhz > 0) {
+      // std::to_string(int) does not look at the locale either; only the
+      // fractional part needs padding by hand, so 60001 mHz stays 60.001.
+      const std::string fraction = std::to_string(refresh_mhz % 1000);
+      mode += "@" + std::to_string(refresh_mhz / 1000) + "." + std::string(3 - fraction.size(), '0') + fraction;
+    }
+    return mode;
   }
 
   std::string getHyprlandOutputName(const std::string &displayName) {

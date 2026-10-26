@@ -1011,6 +1011,18 @@ namespace VDISPLAY {
    */
   hdr_launch_mode_t virtualDisplayHdrMode(bool requested, const kscreen_hdr_state_t &state, bool driver_reports_frame_color);
 
+  /**
+   * The mode of a Hyprland monitor rule: "2448x1848@120.000", or only the size
+   * when no refresh rate is known.
+   *
+   * The refresh is cut from integer millihertz instead of printed from a
+   * double, because printf follows the process's numeric locale and a
+   * locale with a decimal comma turns it into "@120,000" - which Hyprland
+   * reads as a mode it does not have, so the rule it was pinned for never
+   * matches.
+   */
+  std::string hyprlandModeString(int width, int height, int refresh_mhz);
+
   /** Match only the owned KDE virtual output to the connecting client's HDR request. */
   bool configureVirtualDisplayHdr(const std::string &displayName, bool hdr);
 
