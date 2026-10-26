@@ -64,3 +64,69 @@ TEST(HyprlandModeString, IgnoresTheNumericLocale) {
   }
   GTEST_SKIP() << "no locale with a decimal comma is installed";
 }
+
+TEST(HyprlandMonitorRule, SdrIsTenBitWithoutAColorManagementPreset) {
+  EXPECT_EQ(
+    VDISPLAY::hyprlandMonitorRule("HEADLESS-2", 2448, 1848, 120000, false),
+    R"(hl.monitor({ output = "HEADLESS-2", mode = "2448x1848@120.000", position = "auto", scale = 1, bitdepth = 10 }))"
+  );
+}
+
+TEST(HyprlandMonitorRule, HdrAddsTheHdrPresetAndTheCapabilitiesAHeadlessOutputLacks) {
+  EXPECT_EQ(
+    VDISPLAY::hyprlandMonitorRule("HEADLESS-2", 2448, 1848, 120000, true),
+    R"(hl.monitor({ output = "HEADLESS-2", mode = "2448x1848@120.000", position = "auto", scale = 1, bitdepth = 10, cm = "hdr", supports_hdr = 1, supports_wide_color = 1 }))"
+  );
+}
+
+TEST(HyprlandMonitorRule, TheRuleIsLocaleIndependent) {
+  numeric_locale_guard guard {"nl_NL.UTF-8"};
+  if (!guard.active()) {
+    GTEST_SKIP() << "nl_NL.UTF-8 is not installed";
+  }
+  EXPECT_NE(VDISPLAY::hyprlandMonitorRule("HEADLESS-2", 2448, 1848, 120000, true).find("@120.000"), std::string::npos);
+  EXPECT_NE(VDISPLAY::hyprlandKeywordMonitorRule("HEADLESS-2", 2448, 1848, 120000, true).find("@120.000"), std::string::npos);
+}
+
+TEST(HyprlandMonitorRule, KeywordFormUsesTheLegacySyntax) {
+  EXPECT_EQ(
+    VDISPLAY::hyprlandKeywordMonitorRule("HEADLESS-2", 1920, 1080, 60000, false),
+    "HEADLESS-2,1920x1080@60.000,auto,1,bitdepth,10"
+  );
+  EXPECT_EQ(
+    VDISPLAY::hyprlandKeywordMonitorRule("HEADLESS-2", 1920, 1080, 60000, true),
+    "HEADLESS-2,1920x1080@60.000,auto,1,bitdepth,10,cm,hdr,supports_hdr,1,supports_wide_color,1"
+  );
+}
+
+TEST(HyprlandMonitorState, ReadsTheNamedOutput) {
+  const std::string monitors = R"([
+    {"name": "DP-3", "width": 3440, "height": 1440, "refreshRate": 144.00000, "colorManagementPreset": "srgb"},
+    {"name": "HEADLESS-2", "width": 2448, "height": 1848, "refreshRate": 119.99900, "colorManagementPreset": "hdr"}
+  ])";
+
+  const auto state = VDISPLAY::hyprlandMonitorState(monitors, "HEADLESS-2");
+  ASSERT_TRUE(state);
+  EXPECT_EQ(state->width, 2448);
+  EXPECT_EQ(state->height, 1848);
+  EXPECT_EQ(state->refresh_mhz, 119999);
+  EXPECT_EQ(state->color_preset, "hdr");
+
+  const auto physical = VDISPLAY::hyprlandMonitorState(monitors, "DP-3");
+  ASSERT_TRUE(physical);
+  EXPECT_EQ(physical->refresh_mhz, 144000);
+  EXPECT_EQ(physical->color_preset, "srgb");
+}
+
+TEST(HyprlandMonitorState, AnUnknownOutputOrBadTextIsNothing) {
+  EXPECT_FALSE(VDISPLAY::hyprlandMonitorState(R"([{"name": "DP-3"}])", "HEADLESS-2"));
+  EXPECT_FALSE(VDISPLAY::hyprlandMonitorState("not json", "HEADLESS-2"));
+  EXPECT_FALSE(VDISPLAY::hyprlandMonitorState(R"({"name": "HEADLESS-2"})", "HEADLESS-2"));
+}
+
+TEST(HyprlandMonitorState, ABuildWithoutColorManagementHasNoPreset) {
+  const auto state = VDISPLAY::hyprlandMonitorState(R"([{"name": "HEADLESS-2", "width": 800, "height": 600}])", "HEADLESS-2");
+  ASSERT_TRUE(state);
+  EXPECT_TRUE(state->color_preset.empty());
+  EXPECT_EQ(state->refresh_mhz, 0);
+}
