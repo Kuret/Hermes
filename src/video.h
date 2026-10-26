@@ -23,6 +23,15 @@ struct AVPacket;
 
 namespace video {
 
+  // PyroWave's place in the protocol, as Hestia's moonlight-common-c defines
+  // it (VIDEO_FORMAT_PYROWAVE in Limelight.h). Sunshine hands out its codec
+  // bits and stream formats in sequence - the next ServerCodecModeSupport bit
+  // after SCM_AV1_HIGH10_444 is 0x00800000 and bitStreamFormat went 0, 1, 2 -
+  // so these stay well clear of them: a codec Sunshine adds next can't be read
+  // as PyroWave, and a client asking for it can't get PyroWave.
+  inline constexpr int PYROWAVE_VIDEO_FORMAT = 64;  // x-nv-vqos[0].bitStreamFormat
+  inline constexpr uint32_t PYROWAVE_SERVER_CODEC_MODE = 0x40000000;  // SCM_PYROWAVE
+
   /* Encoding configuration requested by remote client */
   struct config_t {
     // DO NOT CHANGE ORDER OR ADD FIELDS IN THE MIDDLE!!!!!
@@ -40,7 +49,7 @@ namespace video {
        SDR encoding colorspace (encoderCscMode >> 1) : 0 - BT.601, 1 - BT.709, 2 - BT.2020 */
     int encoderCscMode;
 
-    int videoFormat;  // 0 - H.264, 1 - HEVC, 2 - AV1, 3 - PyroWave
+    int videoFormat;  // 0 - H.264, 1 - HEVC, 2 - AV1, PYROWAVE_VIDEO_FORMAT - PyroWave
 
     /* Encoding color depth (bit depth): 0 - 8-bit, 1 - 10-bit
        HDR encoding activates when color depth is higher than 8-bit and the display which is being captured is operating in HDR mode */
@@ -206,7 +215,7 @@ namespace video {
           return hevc;
         case 2:
           return av1;
-        case 3:
+        case PYROWAVE_VIDEO_FORMAT:
           // PyroWave uses this encoder only for capture and RGB-to-YUV
           // conversion; its bitstream is produced by the PyroWave API.
           return h264;
@@ -230,9 +239,6 @@ namespace video {
 
   // encoders
   extern encoder_t software;
-
-  inline constexpr int PYROWAVE_VIDEO_FORMAT = 3;
-  inline constexpr uint32_t PYROWAVE_SERVER_CODEC_MODE = 0x00800000;
 
   // True only when this build has a compatible PyroWave C API and a usable
   // Vulkan device. The probe is cached for the process lifetime.
