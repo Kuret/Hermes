@@ -83,6 +83,11 @@ namespace wl {
     return {left, top, right - left, bottom - top};
   }
 
+  int right_of(const std::vector<output_rect_t> &outputs) {
+    const auto envelope = desktop_envelope(outputs);
+    return envelope.width > 0 ? envelope.x + envelope.width : 0;
+  }
+
   input_geometry_t input_geometry(const output_rect_t &envelope, const output_rect_t &output, int mode_width, int mode_height) {
     const double s_x = output.width > 0 && mode_width > 0 ? (double) mode_width / output.width : 1.0;
     const double s_y = output.height > 0 && mode_height > 0 ? (double) mode_height / output.height : 1.0;
@@ -554,6 +559,28 @@ namespace wl {
         }
       }
 
+      // The outputs that were not saved - the virtual one, in practice, which is
+      // about to be removed and has been sitting at the origin all along - are
+      // put just right of the restored physical layout. The physical ones come
+      // back at their saved positions, and a physical output at the origin on
+      // top of a virtual one there is a layout no compositor accepts quietly:
+      // Hyprland tells the user the monitor layout is invalid. Whoever applied
+      // this drops the position with its connection, so nothing keeps it.
+      int unsaved_x = 0;
+      if (restore) {
+        std::vector<output_rect_t> restored;
+        for (const auto &[name, saved] : saved_output_layout) {
+          if (!saved.enabled || saved.width <= 0 || saved.height <= 0) {
+            continue;
+          }
+          int logical_width = 0;
+          int logical_height = 0;
+          logical_size(saved.width, saved.height, saved.transform, saved.scale, logical_width, logical_height);
+          restored.push_back({saved.x, saved.y, logical_width, logical_height});
+        }
+        unsaved_x = right_of(restored);
+      }
+
       for (const auto &head : control.heads) {
         bool enable = head->enabled;
         output_mode_t *mode = preferred_or_current_mode(*head);
@@ -572,6 +599,13 @@ namespace wl {
             y = saved->second.y;
             transform = saved->second.transform;
             scale = saved->second.scale;
+          } else if (enable && mode) {
+            int logical_width = 0;
+            int logical_height = 0;
+            logical_size(mode->width, mode->height, transform, scale, logical_width, logical_height);
+            x = unsaved_x;
+            y = 0;
+            unsaved_x += logical_width;
           }
         } else if (head.get() == &virtual_head) {
           enable = true;
