@@ -61,7 +61,21 @@ namespace platf::pen {
         tilt_y = std::atan2(std::cos(-rotation_rads) * r, z) * 180.f / M_PI;
       }
 
-      bool is_touching = pen.eventType == LI_TOUCH_EVENT_DOWN || pen.eventType == LI_TOUCH_EVENT_MOVE;
+      // Side-button changes are delivered as BUTTON_ONLY while Android may
+      // still be drawing. Keep the last contact state instead of treating a
+      // button-only event as hover and injecting an accidental pen-up.
+      switch (pen.eventType) {
+        case LI_TOUCH_EVENT_DOWN:
+        case LI_TOUCH_EVENT_MOVE:
+          raw->pen_touching = true;
+          break;
+        case LI_TOUCH_EVENT_BUTTON_ONLY:
+          break; // Only buttons changed; do not modify tip contact.
+        default:
+          raw->pen_touching = false;
+          break;
+      }
+      bool is_touching = raw->pen_touching;
 
       // Same offset as touch: it is zero when the session binds the pen to the
       // streamed output, and the output's place in the desktop when it does not.

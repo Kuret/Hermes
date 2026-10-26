@@ -712,6 +712,7 @@ namespace config {
       "hermesKmsDiagnostic",
       "hermesKmsInfo",
       "platform",
+      "preloginInfo",
       "status",
       "streamPorts",
       "vdisplayStatus",

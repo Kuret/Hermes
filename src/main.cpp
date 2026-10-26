@@ -3,6 +3,7 @@
  * @brief Definitions for the main entry point for Sunshine.
  */
 // standard includes
+#include <algorithm>
 #include <codecvt>
 #include <csignal>
 #include <fstream>
@@ -28,6 +29,12 @@
   #include "platform/windows/virtual_display.h"
 #else
   #include "platform/linux/virtual_display.h"
+#endif
+#ifdef __linux__
+  #include "platform/linux/prelogin.h"
+  #include "platform/linux/session_attach.h"
+
+  #include <boost/log/core.hpp>
 #endif
 
 #define PROBE_DISPLAY_UUID "38F72B96-B00C-4F21-8B6C-E1BFF1602B0E"
@@ -160,10 +167,28 @@ int main(int argc, char *argv[]) {
 
   mail::man = std::make_shared<safe::mail_raw_t>();
 
+#ifdef __linux__
+  // `--prelogin` answers on the terminal and nowhere else. Reading the
+  // configuration logs every setting, and starting the log rotates the log
+  // file - of a Hermes that is very likely running while this is asked.
+  const bool prelogin_command = std::any_of(argv + 1, argv + argc, [](const char *argument) {
+    return argument == "--prelogin"sv;
+  });
+  if (prelogin_command) {
+    boost::log::core::get()->set_logging_enabled(false);
+  }
+#endif
+
   // parse config file
   if (config::parse(argc, argv)) {
     return 0;
   }
+
+#ifdef __linux__
+  if (prelogin_command && config::sunshine.cmd.name == "prelogin"sv) {
+    return platf::prelogin::command(argv[0], config::sunshine.cmd.argc, config::sunshine.cmd.argv);
+  }
+#endif
 
   auto log_deinit_guard = logging::init(config::sunshine.min_log_level, config::sunshine.log_file);
   if (!log_deinit_guard) {
@@ -340,6 +365,10 @@ int main(int argc, char *argv[]) {
   // If any of the following fail, we log an error and continue event though sunshine will not function correctly.
   // This allows access to the UI to fix configuration problems or view the logs.
 
+#ifdef __linux__
+  platf::session_attach::drop_stale_display_environment();
+#endif
+
   auto platf_deinit_guard = platf::init();
   if (!platf_deinit_guard) {
     BOOST_LOG(error) << "Platform failed to initialize"sv;
@@ -359,6 +388,7 @@ int main(int argc, char *argv[]) {
   // configuration a user can fix, and the alternative to saying so at startup
   // is that they find out from a black stream.
   VDISPLAY::logSessionAssessment();
+  platf::prelogin::log_report();
 #endif
 
   reed_solomon_init();
@@ -368,14 +398,37 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(warning) << "No gamepad input is available"sv;
   }
 
-  if (video::probe_encoders()) {
+  // A host with no monitor has nothing to probe until a virtual display stands
+  // in, so go straight to one. Probing first would fail and log the fatal "no
+  // display" error - which the Web UI shows as a startup failure - before the
+  // fallback below had even run.
+  const bool display_present = video::display_present();
+#ifdef __linux__
+  // Started before anyone logged in, with no monitor, the only thing on screen
+  // is the login greeter. SDDM's greeter quits for good when its last output
+  // goes away, so the probe display's removal would leave nothing for the
+  // first client to log in on. Leave the greeter alone: the first session
+  // probes on the display it brings up.
+  const bool defer_probe = !display_present && !VDISPLAY::windowSystemAttached();
+  if (defer_probe) {
+    BOOST_LOG(info) << "No monitor is lit and no graphical session is attached; "
+                       "probing encoders when the first session brings up its virtual display."sv;
+  }
+#else
+  constexpr bool defer_probe = false;
+#endif
+  if (!defer_probe && (!display_present || video::probe_encoders())) {
     bool allow_probing = video::allow_encoder_probing();
     // Create a temporary virtual display for encoder capability probing
     if (proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
       std::string probe_uuid_str = PROBE_DISPLAY_UUID;
       auto probe_uuid = uuid_util::uuid_t::parse(probe_uuid_str);
 
-      BOOST_LOG(info) << "Creating a temporary virtual display to probe for encoders..."sv;
+      if (display_present) {
+        BOOST_LOG(info) << "Creating a temporary virtual display to probe for encoders..."sv;
+      } else {
+        BOOST_LOG(info) << "No monitor is lit; creating a temporary virtual display to probe for encoders..."sv;
+      }
 
       if (!config::video.adapter_name.empty()) {
 #ifdef _WIN32
@@ -396,7 +449,7 @@ int main(int argc, char *argv[]) {
         *probe_guid
       );
 #else
-      VDISPLAY::createVirtualDisplay(
+      const auto probe_display = VDISPLAY::createVirtualDisplay(
         probe_uuid_str.c_str(),
         "Probe",
         800,
@@ -407,6 +460,17 @@ int main(int argc, char *argv[]) {
 #endif
 
       std::this_thread::sleep_for(500ms);
+
+#ifndef _WIN32
+      // Windows makes the new display the one capture opens by default; Linux
+      // does not. Left unnamed, the probe below would open the default output
+      // again - the one that just failed, or none at all - and never look at
+      // the display made for it. Sessions name theirs the same way.
+      const auto previous_output = config::video.output_name;
+      if (!probe_display.empty()) {
+        config::video.output_name = probe_display;
+      }
+#endif
 
       // Probe again anyways
       if (video::probe_encoders()) {
@@ -420,6 +484,7 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
       VDISPLAY::removeVirtualDisplay(*probe_guid);
 #else
+      config::video.output_name = previous_output;
       VDISPLAY::removeVirtualDisplay(probe_uuid);
 #endif
     } else if (!allow_probing) {
@@ -458,6 +523,12 @@ int main(int argc, char *argv[]) {
   std::thread httpThread {nvhttp::start};
   std::thread configThread {confighttp::start};
   std::thread rtspThread {rtsp_stream::start};
+
+#ifdef __linux__
+  // Started at boot, before anyone logged in, Hermes joins the graphical
+  // session once there is one and no client is in the way.
+  auto session_attach_guard = platf::session_attach::start();
+#endif
 
 #ifdef _WIN32
   // If we're using the default port and GameStream is enabled, warn the user

@@ -38,8 +38,98 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   remains the fallback. A frame larger than forward error correction can
   cover (about 1.2 MB, so above roughly 550 Mbps at 60 fps) is sent without
   it.
+- Experimental: a Linux host that boots with no monitor and no autologin can
+  stream its login screen ([#61]). Started before anyone has logged in, Hermes
+  brings up its virtual display when a client connects, the greeter draws on
+  it, the client types the password, and the same stream carries on into the
+  desktop. Two things stood in the way. With no session there was nothing to
+  configure the new output through, so the launch gave up at once; Hermes now
+  waits for whatever owns the seat to light it. And the temporary display
+  that probes the encoders at startup took SDDM's greeter down with it, since
+  that greeter exits when its last output goes away and is not restarted;
+  with no monitor and no session the probe now waits for the first client.
+  For the same reason a display removed before login - the application quit
+  from the client, or a launch that failed - no longer takes the output away
+  from the greeter: Hermes keeps it connected, hands it to the next session,
+  and releases it once someone has logged in. A Hermes started before login
+  has none of the session's environment, so it could launch nothing into the
+  desktop or change its layout; about fifteen seconds after the last client
+  disconnects it now restarts itself with the environment the session
+  published. Both have been run on real hardware for the common case - the
+  application quit at the login screen, then a login and a disconnect - and
+  in a virtual machine only for a launch that fails and for a logout.
+  It is off until asked for: `hermes --prelogin enable` writes a copy of the
+  packaged unit that starts with the user manager and turns lingering on, and
+  `hermes --prelogin status` - like a banner on the Web UI's home page -
+  lists what else is in the way. That is whatever lies outside Hermes: a
+  greeter that lights a new output by itself (SDDM's Wayland greeter, not its
+  X11 one), and devices Hermes can open with nobody on the seat. It still has
+  limits that matter on a machine you cannot otherwise reach: until that
+  restart, during the stream you logged in through, Hermes cannot launch
+  applications or change the layout, and a display kept for the greeter stays
+  at the greeter's resolution. The steps and the limits are in
+  [Getting Started](docs/getting_started.md). Run so far on KDE Plasma with
+  SDDM and Hermes-KMS only.
+
+### Changed
+- A session that asks for a virtual display now fails to start when that
+  display cannot be set up, instead of streaming a physical monitor ([#58]).
+  This holds for every way of asking for one (the application's
+  virtual-display setting, the client's virtual-display option, a client set
+  to always use one, headless mode, and a host with no active display) and for
+  every way the setup can fail: no working virtual-display driver, a display
+  created without a name, or a compositor that does not activate the output.
+  Hermes-KMS already refused the physical monitor in that last case; an EVDI
+  output now does too, where it used to stream the physical display behind a
+  warning in the Web UI, and that warning is gone. The launch error says the
+  virtual display failed, both to clients that show the host's message and
+  when launching from the Web UI; Artemis still shows only the error code.
+  Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Linux clipboard helpers (`wl-copy`, `wl-paste`, and `xclip`) now close all
+  inherited non-standard descriptors before execution. The [#71] reporter's
+  socket listing identified a background `wl-copy` retaining video, control,
+  and audio ports after Hermes disconnected, preventing the next connection.
+  Video/audio sockets also receive explicit inheritance protection, and a
+  failed clipboard writer can no longer terminate the host with SIGPIPE.
+- Stream startup now destroys partially initialized shared resources on failure,
+  releasing sockets before a retry. ENet control sockets are marked close-on-exec
+  on POSIX hosts so executed helpers cannot retain the port, and shutdown
+  explicitly releases the control host after its threads finish. Connection
+  failures report the OS error instead of assuming every failure is a port
+  conflict. This hardens the reconnect path investigated in [#71]; validation
+  against the reporter's setup is still pending.
+- The Hestia `capabilities` endpoint reports the real Hermes version in
+  `server_version` (the same one the web UI shows, e.g. `0.6.0`) instead of a
+  fixed `0.1.0-hermes`, so Hestia clients display the installed version.
+- Hermes opens Hermes-KMS control/capture render nodes with `O_RDONLY`. Updated
+  Hermes-KMS udev policy grants the active or configured consumer read-only
+  access, which still permits every private capture ioctl and exported fd but
+  makes Chromium/Electron's `O_RDWR` GPU probe skip this capture-only device.
+  This prevents Chrome, Discord and other Electron applications from freezing
+  when Hermes-KMS registers before the real GPU ([Hermes-KMS #13]).
+- Hermes no longer waits without limit for `kscreen-doctor`. A call that did
+  not return held the lock every virtual display needs, so Hermes neither
+  finished starting nor accepted a session. Each call now has ten seconds,
+  after which it is stopped and Hermes carries on without that layout step.
+- Hermes started with display variables left over from a session that has
+  ended - a lingering user manager can keep them - now ignores them and starts
+  as if nobody were logged in. Qt aborts a process whose display variables
+  point at nothing, and Hermes' tray is Qt.
+- A Linux host with no monitor lit now uses a virtual display on its own, at
+  startup and for every session ([#61]). Hermes asked whether a monitor was
+  present through an interface only Windows implements, so on Linux the answer
+  was always yes. Startup probed the encoders against nothing, logged the fatal
+  "Unable to find display or encoder during startup" that the Web UI shows as a
+  startup error, and only then fell back to a temporary virtual display. Even
+  then the probe was never pointed at that display and opened whichever output
+  capture picks by default. A session that did not itself ask for a virtual
+  display failed to start. Hermes now reads each monitor connector's state
+  from the kernel. When none is lit, it goes straight to a virtual display and
+  probes on that one. A monitor that is switched off but still connected and
+  driven counts as present, as does any setup where the kernel cannot see the
+  monitors, such as NVIDIA without modesetting under X11.
 - Touch and pen now land where they are aimed on a host with more than one
   monitor. Their coordinates were measured against the whole desktop, while
   KDE and GNOME map such a device onto a single output, so every touch fell
@@ -1649,6 +1739,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   former upstream `dist` revision became unreachable.
 
 [#2]: https://github.com/MrOz59/Hermes/issues/2
+[#71]: https://github.com/MrOz59/Hermes/issues/71
 [#6]: https://github.com/MrOz59/Hermes/issues/6
 [#8]: https://github.com/MrOz59/Hermes/issues/8
 [#9]: https://github.com/MrOz59/Hermes/issues/9
@@ -1674,6 +1765,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#43]: https://github.com/MrOz59/Hermes/issues/43
 [#50]: https://github.com/MrOz59/Hermes/issues/50
 [#52]: https://github.com/MrOz59/Hermes/issues/52
+[#58]: https://github.com/MrOz59/Hermes/pull/58
+[#61]: https://github.com/MrOz59/Hermes/issues/61
+[Hermes-KMS #13]: https://github.com/MrOz59/Hermes-KMS/issues/13
 
 ## [0.4.0] - 2026-07-02
 

@@ -56,6 +56,9 @@
 #ifdef _WIN32
   #include "platform/windows/utils.h"
 #endif
+#ifdef __linux__
+  #include "platform/linux/prelogin.h"
+#endif
 
 using namespace std::literals;
 
@@ -382,7 +385,6 @@ namespace confighttp {
       {"sessionType", status.session_type},
       {"exclusiveLayoutSupported", status.exclusive_layout_supported},
       {"outputLayoutBackend", status.output_layout_backend},
-      {"captureFallbackActive", status.capture_fallback_active},
       {"libraryVersion", status.library_version},
       {"runningKernel", status.running_kernel},
       {"dkmsKernels", status.dkms_kernels},
@@ -470,6 +472,29 @@ namespace confighttp {
     }
 
     return output;
+  }
+
+  /**
+   * What it takes for this host to be reached before anyone logs in, for the
+   * home page: silent unless Hermes is set to start at boot.
+   */
+  static nlohmann::json prelogin_status_json() {
+    const auto report = platf::prelogin::report();
+    auto checks = nlohmann::json::array();
+    for (const auto &check : report.checks) {
+      checks.push_back({
+        {"id", check.id},
+        {"state", platf::prelogin::state_name(check.state)},
+        {"title", check.title},
+        {"detail", check.detail},
+        {"fix", check.fix},
+      });
+    }
+    return {
+      {"enabled", report.enabled},
+      {"ready", report.ready},
+      {"checks", std::move(checks)},
+    };
   }
 
   static nlohmann::json clipboard_status_json() {
@@ -1460,6 +1485,7 @@ namespace confighttp {
     output_tree["hermesKmsInfo"] = hermes_kms_status_json();
     output_tree["hermesKmsDiagnostic"] = output_tree["hermesKmsInfo"]["diagnostic"];
     output_tree["clipboardInfo"] = clipboard_status_json();
+    output_tree["preloginInfo"] = prelogin_status_json();
 #endif
     return output_tree;
   }
@@ -1523,7 +1549,10 @@ namespace confighttp {
       {"hestia_protocol", 1},
       {"min_client_protocol", 1},
       {"max_client_protocol", 1},
-      {"server_version", "0.1.0-hermes"},
+      // Same version the web UI and the log report (the VERSION file, plus
+      // the commit suffix on non-release branches), so clients show the
+      // Hermes version the user actually installed.
+      {"server_version", PROJECT_VERSION},
       {"compatibility", {
         {"gamestream", true},
         {"moonlight", true},
@@ -1762,7 +1791,10 @@ namespace confighttp {
       BOOST_LOG(debug) << "[HestiaAPI] session prepare requested: width=" << stream["requested_width"]
                        << " height=" << stream["requested_height"] << " fps=" << stream["requested_fps"]
                        << " virtual_display=" << virtual_display["enabled"]
-                       << " launch_mode=" << app["launch_mode"];
+                       << " launch_mode=" << app["launch_mode"]
+                       << " client_name=" << input["client"]["name"]
+                       << " client_version=" << input["client"]["version"]
+                       << " client_platform=" << input["client"]["platform"];
 
       const nlohmann::json output {
         {"ok", true},
@@ -2137,7 +2169,7 @@ namespace confighttp {
 
     // A capturable display must be present (unless a virtual display will be
     // created on demand).
-    if (video::allow_encoder_probing()) {
+    if (video::display_present()) {
       add("display", "ok", "A capturable display is available.");
     } else {
       add("display", "warn",
@@ -3080,9 +3112,15 @@ fi')CLIP";
           auto launch_session = nvhttp::make_launch_session(true, false, request->parse_query_string(), &named_cert);
           auto err = proc::proc.execute(app, launch_session);
           if (err) {
-            bad_request(response, request, err == 503 ?
-                        "Failed to initialize video capture/encoding. Is a display connected and turned on?" :
-                        "Failed to start the specified application");
+            // Same precedence as the client launch in nvhttp: a reason the
+            // launch recorded beats the guess made from the status code.
+            if (!launch_session->launch_error_message.empty()) {
+              bad_request(response, request, launch_session->launch_error_message);
+            } else {
+              bad_request(response, request, err == 503 ?
+                          "Failed to initialize video capture/encoding. Is a display connected and turned on?" :
+                          "Failed to start the specified application");
+            }
           } else {
             output_tree["status"] = true;
             send_response(response, output_tree);

@@ -116,12 +116,21 @@ session; only the kernel module has to exist on the host. See
 
 A virtual display needs a kernel module, installed separately from Hermes:
 
-- **Hermes-KMS** (default, zero-copy) — <https://github.com/MrOz59/Hermes-KMS>,
-  installed through DKMS. The overview covers the install and the
-  `initial_enabled=0` module option it needs.
-- **EVDI** — the supported alternative, selected automatically when Hermes-KMS
-  is unavailable. On Arch it lives in the AUR (`paru -S evdi`), not the official
-  repositories, so no package depends on it.
+- **EVDI** — the default `virtual_display_backend` and the stable backend. On
+  Arch it lives in the AUR (`paru -S evdi`), not the official repositories, so
+  no package depends on it.
+- **Hermes-KMS** (zero-copy, opt-in with `virtual_display_backend = hermes_kms`,
+  labeled experimental for now) — <https://github.com/MrOz59/Hermes-KMS>,
+  installed through DKMS. Hermes 0.6.0 needs the driver's `v0.4.0` tag; a
+  nightly works with `v0.4.0` or `main`.
+  [The overview](../README.md#installing-the-hermes-kms-driver) covers the
+  install and the `initial_enabled=0` module option it needs. Hermes does not
+  fall back to EVDI on its own when Hermes-KMS is selected but unavailable.
+
+Several features exist only on Hermes-KMS: zero-copy capture on AMD/Intel,
+HDR10 on a virtual display, multi-output, independent sessions and streaming
+before login — see
+[What needs Hermes-KMS](../README.md#what-needs-hermes-kms).
 
 The Audio/Video settings tab shows a live diagnostic and a step-by-step install
 guide when either driver is missing.
@@ -190,6 +199,103 @@ systemctl --user restart hermes
 
 To make this persistent, add the same `import-environment` line to your
 compositor's startup (e.g. an autostart script) so it runs at every login.
+
+#### Before anyone logs in (experimental)
+
+A host that reboots with no monitor and no autologin has no session for the
+service to start in, so there is nothing to connect to until someone logs in
+at the machine. Hermes can instead be started at boot and stream the login
+screen: the client types the password, and the same stream carries on into the
+desktop.
+
+This has been run on one setup - KDE Plasma with SDDM, Hermes-KMS, an AMD GPU
+and an Artemis client - and installing the package does not turn it on. Read
+the limits below before relying on it for a machine you cannot reach any other
+way.
+
+**Setting it up**
+
+As the user Hermes streams for:
+
+```bash
+hermes --prelogin enable
+```
+
+That does the part that is Hermes' to do, and neither step needs root. It
+writes a copy of the packaged unit that starts with your user manager instead
+of the graphical session, and it turns on lingering so that manager runs from
+boot. Enabling the packaged unit for `default.target` by hand is not the same
+thing: it wants `graphical-session.target`, and started at boot it would mark
+a graphical session as running when there is none. The change takes effect the
+next time Hermes starts.
+
+It then lists what is still in the way, as `hermes --prelogin status` does at
+any time. The Web UI shows the same list on its home page for as long as
+something on it is missing. What can be left is outside Hermes:
+
+1. **A greeter that lights a new output by itself.** With SDDM that is the
+   Wayland greeter; the X11 greeter never lights a virtual output. As root:
+
+   ```ini
+   # /etc/sddm.conf.d/10-wayland.conf
+   [General]
+   DisplayServer=wayland
+   GreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+
+   [Wayland]
+   CompositorCommand=kwin_wayland --drm --no-lockscreen --no-global-shortcuts --locale1
+   ```
+
+   `/etc/sddm.conf` overrides the files in `sddm.conf.d`: if it sets
+   `DisplayServer=x11`, change it there. SDDM logs in automatically whenever
+   `User=` is set under `[Autologin]`, whatever else that section says, and
+   with autologin on none of this is used.
+2. **Input devices without a session.** Before login the seat belongs to the
+   greeter, so the per-session grant to `/dev/uinput` does not reach Hermes:
+   `sudo usermod -aG input $USER`, then reboot.
+3. **The virtual display without a session.** Hermes-KMS is the only virtual
+   display this has been run with, so set `virtual_display_backend =
+   hermes_kms`. `sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user
+   auto` gives your user its device regardless of who is logged in; the helper
+   comes with the driver's optional broker (`hermes-kms-seatd-git`, or
+   `sudo make INSTALL_BROKER=1 dkms-install` from a clone).
+
+`hermes --prelogin disable` goes back to starting Hermes with the graphical
+session, and turns lingering off again if `enable` was what turned it on. A
+unit of your own in `~/.config/systemd/user` is never replaced or removed.
+
+**Limits**
+
+- **The greeter must not lose its last output.** SDDM's greeter exits when
+  that happens and SDDM does not start another, so there is no login screen
+  left to stream. Hermes does not probe the encoders at startup for that
+  reason, and when a display is removed before login - the application is
+  quit from the client, or a launch fails - it keeps the output connected for
+  the greeter, hands it to the next session, and lets it go once someone has
+  logged in. A kept output stays at the resolution the greeter is using, so
+  the next client streams that resolution whatever it asks for. Quitting the
+  application has been run on real hardware; a launch that fails, in a
+  virtual machine only. If the login screen is gone anyway,
+  `sudo systemctl restart sddm` over SSH brings it back.
+- **Hermes joins the session only once no client is connected.** The
+  stream, input and audio carry on through the login, but a Hermes that
+  started before it has none of the session's environment, and a running
+  process cannot be given one. Until it has, applications it launches do not
+  find the desktop, and it cannot change the resolution of a display that is
+  already lit, apply the exclusive, mirror or detached layouts, or share the
+  clipboard. About fifteen seconds after the last client disconnects, Hermes
+  restarts itself with the environment the session published - what
+  `systemctl --user restart hermes` would do - and is unreachable for the few
+  seconds that takes. If that restart stalls, Hermes' own ten-second shutdown
+  watchdog ends it and systemd starts it again, inside the session either
+  way. When you log out, Hermes exits with the compositor and systemd brings
+  it back for the login screen within about ten seconds. The restart after
+  the last client leaves has been run on real hardware; the watchdog path and
+  the logout, in a virtual machine only.
+- **Encoders are not probed until the first session.** Until then the host
+  reports H.264 only. In the test the first connection still negotiated HEVC;
+  a client that decides from that report alone may start in H.264 once.
+- Other greeters and desktops (GDM, GNOME, LightDM, greetd) are untested.
 
 #### SteamOS and Game Mode
 
@@ -366,7 +472,13 @@ All shortcuts start with `Ctrl+Alt+Shift`, just like Moonlight.
 * If inputs (mouse, keyboard, gamepads...) aren't working after connecting, add the user running hermes to the `input` group.
 
 ### HDR Support
-Streaming HDR content is officially supported on Windows hosts and experimentally supported for Linux hosts.
+Streaming HDR content is experimental on Linux hosts. The Windows notes below are inherited from upstream Sunshine;
+Hermes does not publish or exercise a Windows build.
+
+On a Hermes-KMS virtual display, HDR10 capture targets AMD through VAAPI (Intel shares the path but is untested) and
+NVIDIA through NVENC, by way of the CPU copy that backend always uses there. It needs `virtual_display_backend = hermes_kms`, Hermes-KMS
+v0.4.0 or newer loaded with `hdr_enable=1 color_depth=10`, HDR enabled for the virtual output in KDE, and HDR enabled
+in the client; EVDI has no HDR path. See [Hermes-KMS HDR10](hermes_kms_hdr.md).
 
 * General HDR support information and requirements:
 
