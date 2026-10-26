@@ -130,3 +130,47 @@ TEST(HyprlandMonitorState, ABuildWithoutColorManagementHasNoPreset) {
   EXPECT_TRUE(state->color_preset.empty());
   EXPECT_EQ(state->refresh_mhz, 0);
 }
+
+TEST(HyprlandEvents, NamesTheEventBeforeTheSeparator) {
+  EXPECT_EQ(VDISPLAY::hyprlandEventName("configreloaded>>"), "configreloaded");
+  EXPECT_EQ(VDISPLAY::hyprlandEventName("monitoradded>>HEADLESS-2"), "monitoradded");
+  // Only the first separator counts; the data may contain one.
+  EXPECT_EQ(VDISPLAY::hyprlandEventName("openwindow>>a,b>>c"), "openwindow");
+}
+
+TEST(HyprlandEvents, ALineWithoutASeparatorIsNoEvent) {
+  EXPECT_EQ(VDISPLAY::hyprlandEventName(""), "");
+  EXPECT_EQ(VDISPLAY::hyprlandEventName("configreloaded"), "");
+  EXPECT_EQ(VDISPLAY::hyprlandEventName("configreloaded>"), "");
+}
+
+TEST(HyprlandEvents, SeveralLinesInOneReadAreSplit) {
+  std::string buffer = "workspace>>2\nconfigreloaded>>\nfocusedmon>>DP-3,2\n";
+  const auto lines = VDISPLAY::hyprlandTakeEventLines(buffer);
+  ASSERT_EQ(lines.size(), 3U);
+  EXPECT_EQ(lines[0], "workspace>>2");
+  EXPECT_EQ(lines[1], "configreloaded>>");
+  EXPECT_EQ(lines[2], "focusedmon>>DP-3,2");
+  EXPECT_TRUE(buffer.empty());
+}
+
+TEST(HyprlandEvents, ALineSplitAcrossReadsWaitsForItsEnd) {
+  std::string buffer = "workspace>>2\nconfigrel";
+  auto lines = VDISPLAY::hyprlandTakeEventLines(buffer);
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_EQ(lines[0], "workspace>>2");
+  EXPECT_EQ(buffer, "configrel");
+
+  buffer += "oaded>>\n";
+  lines = VDISPLAY::hyprlandTakeEventLines(buffer);
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_EQ(VDISPLAY::hyprlandEventName(lines[0]), "configreloaded");
+  EXPECT_TRUE(buffer.empty());
+}
+
+TEST(HyprlandEvents, EmptyLinesAreDropped) {
+  std::string buffer = "\n\nconfigreloaded>>\n\n";
+  const auto lines = VDISPLAY::hyprlandTakeEventLines(buffer);
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_TRUE(buffer.empty());
+}

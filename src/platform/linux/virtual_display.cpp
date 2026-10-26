@@ -599,14 +599,14 @@ namespace VDISPLAY {
    * inherited.
    */
   namespace hyprland {
-    static std::string socket_path() {
+    static std::string socket_path(const char *socket_name = ".socket.sock") {
       const char *signature = std::getenv("HYPRLAND_INSTANCE_SIGNATURE");
       if (!signature || !signature[0]) {
         return {};
       }
       const char *runtime_dir = std::getenv("XDG_RUNTIME_DIR");
       std::string base = runtime_dir && runtime_dir[0] ? runtime_dir : "/run/user/" + std::to_string(getuid());
-      return base + "/hypr/" + signature + "/.socket.sock";
+      return base + "/hypr/" + signature + "/" + socket_name;
     }
 
     static bool available() {
@@ -614,9 +614,17 @@ namespace VDISPLAY {
       return !path.empty() && std::filesystem::exists(path);
     }
 
-    // The HDR state each pinned output was last given; see pin_output().
+    // What each pinned output was last given, so the rule can be put back in
+    // exactly that form; see pin_output() and the reload listener below. The
+    // mutex only ever guards the map: nothing talks to Hyprland while holding it.
+    struct pinned_rule_t {
+      int width {0};
+      int height {0};
+      int refresh_mhz {0};
+      bool hdr {false};
+    };
     static std::mutex hdr_mutex;
-    static std::map<std::string, bool> hdr_outputs;
+    static std::map<std::string, pinned_rule_t> pinned_rules;
 
     /** Send one command and return the whole reply, or nullopt if the socket refused. */
     static std::optional<std::string> request(const std::string &command) {
@@ -739,10 +747,19 @@ namespace VDISPLAY {
      * headless output back on the catch-all rule: on a scaled desktop that
      * means a different mode, a different scale and an auto position, while
      * the stream keeps encoding the size it negotiated. A rule keyed by the
-     * output's name is what `hyprctl keyword monitor` adds by hand, and it is
-     * what the reload finds. Rules replace by name and HEADLESS-N names are
-     * not reused, so one stale rule per session name remains until the next
-     * config reload; it matches nothing once its output is gone.
+     * output's name outlasts a rule reapplication, which is all that case
+     * needs. Rules replace by name and HEADLESS-N names are not reused, so one
+     * stale rule per session name remains until the next config reload; it
+     * matches nothing once its output is gone.
+     *
+     * It does not outlast a configuration reload. With a Lua config a reload
+     * runs the config again from nothing, and a rule that arrived through `eval`
+     * was never part of it, so it is gone - the output falls back to the
+     * catch-all rule, mode, scale and colour included, in the middle of a
+     * stream. The legacy `keyword monitor` is no better, a reload discards
+     * keywords too. So the rule cannot be pinned once and trusted: pinned_rules
+     * remembers it and watch_reloads() says it again whenever Hyprland announces
+     * that it reloaded.
      *
      * The rule goes through `eval hl.monitor({...})` first, the only form
      * Hyprland main still registers, and through `keyword monitor` when eval
@@ -774,14 +791,19 @@ namespace VDISPLAY {
       }
       // Rules replace by name, so a re-pin for a new mode that said nothing
       // about HDR would quietly turn it off. The state a rule last carried is
-      // therefore kept and reused whenever the caller does not name one.
+      // therefore kept and reused whenever the caller does not name one. The
+      // whole rule is kept, not just that: a reload throws the rule away and
+      // the listener has to be able to say it again.
       const bool want_hdr = [&]() {
         std::lock_guard<std::mutex> lock(hdr_mutex);
+        auto &pinned = pinned_rules[name];
         if (hdr) {
-          hdr_outputs[name] = *hdr;
+          pinned.hdr = *hdr;
         }
-        const auto it = hdr_outputs.find(name);
-        return it != hdr_outputs.end() && it->second;
+        pinned.width = width;
+        pinned.height = height;
+        pinned.refresh_mhz = refresh_mhz;
+        return pinned.hdr;
       }();
 
       std::string rule = hyprlandMonitorRule(name, width, height, refresh_mhz, want_hdr);
@@ -853,14 +875,207 @@ namespace VDISPLAY {
       return false;
     }
 
+    /**
+     * @brief Say the pinned rules again whenever Hyprland reloads its configuration.
+     *
+     * See pin_output() for why a reload undoes them. Hyprland announces a
+     * reload as `configreloaded>>` on its event socket, so one thread reads
+     * that socket for as long as Hermes has a headless output and answers each
+     * announcement by re-pinning every such output with its last rule. A scale
+     * or luminance a user's own config applies on top, after Hermes's rule,
+     * keeps cm and bitdepth and is none of Hermes's business.
+     *
+     * The thread sleeps in poll() on the socket and a stop pipe, so there is no
+     * polling interval to tune and stopping is immediate. It never takes
+     * vdisplay_mutex, and holds hdr_mutex and watch_mutex only to copy state,
+     * never across a request, so the display code can start and stop it from
+     * under its own locks. If the socket closes - Hyprland exited, or restarted
+     * under the same signature - it reconnects, quietly after the first time.
+     */
+    static std::mutex watch_mutex;
+    static std::set<std::string> watched_outputs;
+
+    class reload_watcher_t {
+    public:
+      reload_watcher_t() {
+        if (pipe2(stop_pipe, O_CLOEXEC) != 0) {
+          stop_pipe[0] = stop_pipe[1] = -1;
+          return;
+        }
+        thread = std::thread([this]() {
+          run();
+        });
+      }
+
+      ~reload_watcher_t() {
+        if (stop_pipe[1] >= 0) {
+          const char byte = 0;
+          [[maybe_unused]] const auto written = write(stop_pipe[1], &byte, 1);
+        }
+        if (thread.joinable()) {
+          thread.join();
+        }
+        for (int fd : stop_pipe) {
+          if (fd >= 0) {
+            close(fd);
+          }
+        }
+      }
+
+      reload_watcher_t(const reload_watcher_t &) = delete;
+      reload_watcher_t &operator=(const reload_watcher_t &) = delete;
+
+    private:
+      /** @return true when asked to stop within @p timeout_ms. */
+      bool stopped_within(int timeout_ms) {
+        pollfd stop {stop_pipe[0], POLLIN, 0};
+        return poll(&stop, 1, timeout_ms) > 0;
+      }
+
+      static int connect_events() {
+        const auto path = socket_path(".socket2.sock");
+        if (path.empty() || path.size() >= sizeof(sockaddr_un::sun_path)) {
+          return -1;
+        }
+        const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (fd < 0) {
+          return -1;
+        }
+        sockaddr_un addr {};
+        addr.sun_family = AF_UNIX;
+        std::memcpy(addr.sun_path, path.c_str(), path.size() + 1);
+        if (connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
+          close(fd);
+          return -1;
+        }
+        return fd;
+      }
+
+      static void repin_all() {
+        std::vector<std::pair<std::string, pinned_rule_t>> rules;
+        {
+          std::scoped_lock lock(watch_mutex, hdr_mutex);
+          for (const auto &name : watched_outputs) {
+            if (const auto it = pinned_rules.find(name); it != pinned_rules.end()) {
+              rules.emplace_back(name, it->second);
+            }
+          }
+        }
+        if (rules.empty()) {
+          return;
+        }
+        BOOST_LOG(info) << "[VDISPLAY] Hyprland reloaded its configuration; pinning " << rules.size()
+                        << " headless output rule(s) again.";
+        for (const auto &[name, rule] : rules) {
+          pin_output(name, rule.width, rule.height, rule.refresh_mhz, rule.hdr);
+        }
+      }
+
+      void run() {
+        // A re-pin is itself a change to the monitor rules, and Hyprland is free
+        // to answer one with an event of its own. Events that arrive just after
+        // our own pin are therefore ours; reacting to them would pin forever.
+        constexpr auto own_echo = std::chrono::milliseconds {500};
+        auto quiet_until = std::chrono::steady_clock::now();
+        bool reported = false;
+
+        while (!stopped_within(0)) {
+          const int fd = connect_events();
+          if (fd < 0) {
+            if (!reported) {
+              BOOST_LOG(warning) << "[VDISPLAY] Cannot listen to Hyprland's event socket; "
+                                    "a configuration reload will not be answered with the monitor rule. Retrying.";
+              reported = true;
+            }
+            if (stopped_within(2000)) {
+              return;
+            }
+            continue;
+          }
+          reported = false;
+          auto close_fd = util::fail_guard([fd]() {
+            close(fd);
+          });
+
+          std::string buffer;
+          char chunk[4096];
+          while (true) {
+            pollfd fds[2] = {{fd, POLLIN, 0}, {stop_pipe[0], POLLIN, 0}};
+            if (poll(fds, 2, -1) < 0) {
+              if (errno == EINTR) {
+                continue;
+              }
+              break;
+            }
+            if (fds[1].revents) {
+              return;
+            }
+            const ssize_t n = read(fd, chunk, sizeof(chunk));
+            if (n < 0 && errno == EINTR) {
+              continue;
+            }
+            if (n <= 0) {
+              break;  // Hyprland closed the socket; reconnect below.
+            }
+            buffer.append(chunk, static_cast<size_t>(n));
+            for (const auto &line : hyprlandTakeEventLines(buffer)) {
+              if (hyprlandEventName(line) == "configreloaded" && std::chrono::steady_clock::now() >= quiet_until) {
+                repin_all();
+                quiet_until = std::chrono::steady_clock::now() + own_echo;
+              }
+            }
+            // A peer that never ends a line must not grow this without bound.
+            if (buffer.size() > 65536) {
+              buffer.clear();
+            }
+          }
+
+          if (stopped_within(2000)) {
+            return;
+          }
+        }
+      }
+
+      int stop_pipe[2] {-1, -1};
+      std::thread thread;
+    };
+
+    static std::unique_ptr<reload_watcher_t> reload_watcher;
+
+    /** Start answering reloads for an output; the first one starts the listener. */
+    static void watch_output(const std::string &name) {
+      std::lock_guard<std::mutex> lock(watch_mutex);
+      watched_outputs.insert(name);
+      if (!reload_watcher) {
+        reload_watcher = std::make_unique<reload_watcher_t>();
+      }
+    }
+
+    /** Stop answering for an output; the last one stops the listener. */
+    static void unwatch_output(const std::string &name) {
+      std::unique_ptr<reload_watcher_t> stopping;
+      {
+        std::lock_guard<std::mutex> lock(watch_mutex);
+        watched_outputs.erase(name);
+        if (watched_outputs.empty()) {
+          stopping = std::move(reload_watcher);
+        }
+      }
+      // Joined outside the lock: the thread takes it when it re-pins.
+      stopping.reset();
+    }
+
     static bool remove_output(const std::string &name) {
       if (name.empty()) {
         return false;
       }
       {
         std::lock_guard<std::mutex> lock(hdr_mutex);
-        hdr_outputs.erase(name);
+        pinned_rules.erase(name);
       }
+      // Before the output goes, not after: a reload landing in between would
+      // otherwise pin a rule for an output that is on its way out.
+      unwatch_output(name);
       const auto reply = request("/output remove " + name);
       if (!reply || reply->rfind("ok", 0) != 0) {
         BOOST_LOG(warning) << "[VDISPLAY] Hyprland refused to remove output " << name
@@ -6897,6 +7112,7 @@ namespace VDISPLAY {
       vdinfo.connector_name = *output;
       vdinfo.using_hyprland_headless = true;
       virtual_displays[guid_str] = vdinfo;
+      hyprland::watch_output(*output);
 
       BOOST_LOG(info) << "[VDISPLAY] Hyprland created headless output " << *output << " for " << display_name
                       << "; it renders on the primary GPU, so no virtual DRM device is involved.";
@@ -7574,6 +7790,24 @@ namespace VDISPLAY {
       rule += ",cm,hdr,supports_hdr,1,supports_wide_color,1";
     }
     return rule;
+  }
+
+  std::string hyprlandEventName(std::string_view line) {
+    const auto separator = line.find(">>");
+    return separator == std::string_view::npos ? std::string {} : std::string {line.substr(0, separator)};
+  }
+
+  std::vector<std::string> hyprlandTakeEventLines(std::string &buffer) {
+    std::vector<std::string> lines;
+    size_t start = 0;
+    for (size_t end = buffer.find('\n', start); end != std::string::npos; end = buffer.find('\n', start)) {
+      if (end > start) {
+        lines.emplace_back(buffer, start, end - start);
+      }
+      start = end + 1;
+    }
+    buffer.erase(0, start);
+    return lines;
   }
 
   std::optional<hyprland_monitor_state_t> hyprlandMonitorState(const std::string &monitors_json, const std::string &output) {

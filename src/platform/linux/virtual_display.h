@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <sys/types.h>
@@ -1038,6 +1039,21 @@ namespace VDISPLAY {
 
   /** The same rule in the `keyword monitor` syntax of a Hyprland that predates the Lua config. */
   std::string hyprlandKeywordMonitorRule(const std::string &name, int width, int height, int refresh_mhz, bool hdr);
+
+  /**
+   * The name of a line of Hyprland's event socket (`.socket2.sock`): everything
+   * before the first ">>", or empty for a line without one. Events are
+   * "name>>data", one per line.
+   */
+  std::string hyprlandEventName(std::string_view line);
+
+  /**
+   * Cut the complete lines off the front of what has been read from the event
+   * socket and leave the unfinished tail in @p buffer. A read ends wherever the
+   * kernel felt like ending it, so a line may arrive in two pieces, and
+   * several may arrive in one.
+   */
+  std::vector<std::string> hyprlandTakeEventLines(std::string &buffer);
 
   /** What `hyprctl monitors -j` says about one output. */
   struct hyprland_monitor_state_t {
