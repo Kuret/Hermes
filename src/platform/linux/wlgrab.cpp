@@ -59,6 +59,16 @@ namespace wl {
         return -1;
       }
 
+      // Only an HDR client gets a colour-aware connection. A compositor hands a
+      // client that has bound color-management the output's own encoding - PQ
+      // BT.2020 when the output is in HDR - and tone-maps the capture to sRGB
+      // for one that has not. For a client that asked for SDR the tone-mapped
+      // copy is the correct stream, and it is what this capture produced before
+      // it could be colour-aware at all, so such a session is left unaware: it
+      // cannot be handed PQ, and nothing here has to refuse or relabel it.
+      // An HDR probe asks with dynamicRange set, like the session it stands for,
+      // so it binds too.
+      interface.bind_color_manager = config.dynamicRange != 0;
       interface.listen(display.registry());
 
       display.roundtrip();
@@ -176,6 +186,8 @@ namespace wl {
 
       output = monitor->output;
 
+      describe_output_color();
+
       offset_x = monitor->viewport.offset_x;
       offset_y = monitor->viewport.offset_y;
       width = monitor->viewport.width;
@@ -208,6 +220,21 @@ namespace wl {
 
     int dummy_img(platf::img_t *img) override {
       return 0;
+    }
+
+    /**
+     * An output is HDR when the compositor says it is encoding SMPTE ST 2084 PQ.
+     * Nothing else is looked at: the compositor delivers PQ-encoded BT.2020 RGB
+     * to a client that bound color-management, and the encoder only has to put
+     * the BT.2020 matrix on it, as the KMS capture does. A compositor without
+     * the protocol never says so, and stays SDR as it always was.
+     */
+    bool is_hdr() override {
+      return color.encoding().pq();
+    }
+
+    bool get_hdr_metadata(SS_HDR_METADATA &metadata) override {
+      return wl::hdr_metadata_from_color_info(color.encoding(), metadata);
     }
 
     inline platf::capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor) {
@@ -244,6 +271,17 @@ namespace wl {
         dmabuf.listen(interface.screencopy_manager, interface.dmabuf_interface, output, cursor);
       }
 
+      // A change in how the output is encoded - HDR switched on or off, or a
+      // new mastering range - leaves the encoder configured for the old
+      // colourspace, and nothing in the frames says so. Rebuilding the display
+      // rebuilds the encoder with it, which is what kmsgrab does when the
+      // connector's HDR metadata changes. Checked before the frame is awaited,
+      // since the event arrives with whatever the dispatch below reads.
+      if (color.changed()) {
+        BOOST_LOG(info) << "Reinitializing capture after the output's image description changed"sv;
+        return platf::capture_e::reinit;
+      }
+
       do {
         auto remaining_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(to - std::chrono::steady_clock::now());
         if (remaining_time_ms.count() < 0 || !display.dispatch(remaining_time_ms)) {
@@ -263,6 +301,10 @@ namespace wl {
         // below decides what a failed session means, not the next iteration.
         if (use_icc && dmabuf.status == dmabuf_t::WAITING) {
           dmabuf.icc_capture(cursor);
+        }
+        if (color.changed()) {
+          BOOST_LOG(info) << "Reinitializing capture after the output's image description changed"sv;
+          return platf::capture_e::reinit;
         }
       } while (dmabuf.status == dmabuf_t::WAITING);
 
@@ -300,9 +342,56 @@ namespace wl {
     wl::display_t display;
     interface_t interface;
     dmabuf_t dmabuf;
+    // After interface, so it is released before the manager it was made from.
+    color_output_t color;
 
     wl_output *output;
     bool use_icc {false};
+
+  private:
+    /**
+     * Ask the compositor how the selected output is encoded and wait for the
+     * answer, which takes a few round trips: the output hands out a
+     * description, which becomes ready, which is then asked for its details.
+     * Does nothing without color-management, which includes every session whose
+     * client did not ask for HDR: those never bound it.
+     *
+     * An HDR client on an output that turns out not to be PQ is simply an SDR
+     * stream - is_hdr() says false - so that is only logged.
+     */
+    void describe_output_color() {
+      if (!interface[wl::interface_t::COLOR_MANAGEMENT]) {
+        BOOST_LOG(debug) << "Colour management is not in use; the output is captured as SDR"sv;
+        return;
+      }
+
+      color.listen(interface.color_manager, output);
+      for (int round = 0; round < 4 && !color.settled(); ++round) {
+        display.roundtrip();
+      }
+
+      const auto &encoding = color.encoding();
+      if (!color.settled() || encoding.failed) {
+        BOOST_LOG(warning) << "Could not read the output's colour description; capturing it as SDR"sv;
+        return;
+      }
+
+      BOOST_LOG(info) << "Output colour: transfer function "sv << encoding.transfer_function.value_or(0)
+                      << (encoding.pq() ? " (ST 2084 PQ)"sv : ""sv)
+                      << ", named primaries "sv << encoding.primaries_named.value_or(0)
+                      << ", target luminance "sv << encoding.target_min_lum.value_or(0) << "/10000 to "sv << encoding.target_max_lum.value_or(0) << " cd/m2";
+
+      // The hardware encoders get BT.2020 RGB from this path and nothing else.
+      // PQ in any other gamut would be labelled BT.2020 and look desaturated.
+      if (encoding.pq() && encoding.primaries_named && *encoding.primaries_named != WP_COLOR_MANAGER_V1_PRIMARIES_BT2020) {
+        BOOST_LOG(warning) << "The HDR output is encoded with primaries "sv << *encoding.primaries_named
+                           << ", not BT.2020; colours will be wrong in the stream."sv;
+      }
+
+      if (!encoding.pq()) {
+        BOOST_LOG(info) << "The client asked for HDR but the output is not in HDR; streaming SDR"sv;
+      }
+    }
   };
 
   class wlr_ram_t: public wlr_t {

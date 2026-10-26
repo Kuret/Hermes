@@ -596,6 +596,80 @@ namespace wl {
     wl_output_add_listener(output, &wl_listener, this);
   }
 
+  namespace {
+    // The protocol carries xy as value * 1,000,000; SS_HDR_METADATA, like the
+    // CTA-861 infoframe it mirrors, as value * 50,000.
+    constexpr std::int32_t protocol_chromaticity_scale = 1'000'000;
+    constexpr std::int32_t ss_chromaticity_scale = 50'000;
+
+    std::uint16_t clamp_u16(std::int64_t value) {
+      return static_cast<std::uint16_t>(std::clamp<std::int64_t>(value, 0, UINT16_MAX));
+    }
+
+    // xy * 1,000,000 to xy * 50,000, rounded to nearest rather than truncated so
+    // that 0.708 (708000) lands on 14160 exactly and 0.3127 on 6254 instead of 6253.
+    std::uint16_t chromaticity_to_ss(std::int32_t value) {
+      constexpr std::int64_t divisor = protocol_chromaticity_scale / ss_chromaticity_scale;
+      return clamp_u16((static_cast<std::int64_t>(value) + divisor / 2) / divisor);
+    }
+
+    // ITU-R BT.2020 primaries with a D65 white point, xy * 1,000,000. The encode
+    // path applies the BT.2020 RGB to YUV matrix to anything this capture
+    // calls HDR, so this is also what the metadata should claim when a
+    // compositor says nothing more specific.
+    constexpr color_info_t::chromaticities_t bt2020_chromaticities {708000, 292000, 170000, 797000, 131000, 46000, 312700, 329000};
+    constexpr color_info_t::chromaticities_t srgb_chromaticities {640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000};
+    constexpr color_info_t::chromaticities_t display_p3_chromaticities {680000, 320000, 265000, 690000, 150000, 60000, 312700, 329000};
+
+    std::optional<color_info_t::chromaticities_t> named_chromaticities(std::uint32_t named) {
+      switch (named) {
+        case WP_COLOR_MANAGER_V1_PRIMARIES_BT2020:
+          return bt2020_chromaticities;
+        case WP_COLOR_MANAGER_V1_PRIMARIES_SRGB:
+          return srgb_chromaticities;
+        case WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3:
+          return display_p3_chromaticities;
+        default:
+          return std::nullopt;
+      }
+    }
+  }  // namespace
+
+  bool hdr_metadata_from_color_info(const color_info_t &info, SS_HDR_METADATA &metadata) {
+    std::memset(&metadata, 0, sizeof(metadata));
+
+    if (!info.pq()) {
+      return false;
+    }
+
+    // Target volume first, then how the colour is encoded, then whatever the
+    // named set means, and BT.2020 last since PQ here is always delivered as that.
+    color_info_t::chromaticities_t chromaticities = bt2020_chromaticities;
+    if (info.target_primaries) {
+      chromaticities = *info.target_primaries;
+    } else if (info.primaries) {
+      chromaticities = *info.primaries;
+    } else if (info.primaries_named) {
+      if (auto named = named_chromaticities(*info.primaries_named)) {
+        chromaticities = *named;
+      }
+    }
+
+    for (int i = 0; i < 3; ++i) {
+      metadata.displayPrimaries[i].x = chromaticity_to_ss(chromaticities[i * 2]);
+      metadata.displayPrimaries[i].y = chromaticity_to_ss(chromaticities[i * 2 + 1]);
+    }
+    metadata.whitePoint.x = chromaticity_to_ss(chromaticities[6]);
+    metadata.whitePoint.y = chromaticity_to_ss(chromaticities[7]);
+
+    metadata.maxDisplayLuminance = clamp_u16(info.target_max_lum.value_or(info.max_lum.value_or(0)));
+    metadata.minDisplayLuminance = clamp_u16(info.target_min_lum.value_or(info.min_lum.value_or(0)));
+    metadata.maxContentLightLevel = clamp_u16(info.target_max_cll.value_or(0));
+    metadata.maxFrameAverageLightLevel = clamp_u16(info.target_max_fall.value_or(0));
+
+    return true;
+  }
+
   /**
    * One description of an output, from the request that asked for it until its
    * information has all arrived. Owns the protocol objects so that dropping a

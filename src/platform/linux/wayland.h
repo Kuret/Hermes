@@ -224,6 +224,24 @@ namespace wl {
   };
 
   /**
+   * @brief Fill the metadata a Moonlight client expects from an output's image description.
+   *
+   * The units are those of SS_HDR_METADATA, which are the DRM HDR_OUTPUT_METADATA
+   * (CTA-861) ones the KMS capture copies unchanged: chromaticities are xy
+   * normalised to 50,000, so the protocol's xy * 1,000,000 is divided by 20;
+   * maximum luminance is in cd/m^2 and minimum in 1/10000 cd/m^2, which is
+   * already how the protocol carries it. Values are clamped to 16 bits rather
+   * than wrapped, since a compositor that reports a 100,000 cd/m^2 ceiling
+   * should read as "very bright" and not as 34,464.
+   *
+   * The target volume - what the display can actually show, and what ST 2086
+   * mastering metadata means - wins over the primary volume wherever the
+   * compositor gave both.
+   * @return false when the description is not PQ, i.e. there is no HDR metadata.
+   */
+  bool hdr_metadata_from_color_info(const color_info_t &info, SS_HDR_METADATA &metadata);
+
+  /**
    * @brief An output's image description, kept current for as long as it lives.
    *
    * Asking for the description is a chain of three round trips - the output
