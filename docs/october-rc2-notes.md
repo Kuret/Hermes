@@ -1,47 +1,72 @@
-# Hermes — October 2026 release candidate 2
+# Hermes — October 2026 RC2
 
-This candidate fixes native Linux packaging from RC1. The RC1 downloads remain available with their original contents.
+This candidate fixes Linux packaging problems found while testing RC1, particularly the startup failure reported on Fedora 44.
 
-## Fixed
+## What changed
 
-- Fedora 43/44: the bundled PyroWave runtime installs under `/usr/lib64/hermes` on x86_64. Hermes uses that absolute install RUNPATH so glibc can resolve the codec while file capabilities enable secure execution. This fixes the pre-startup `libpyrowave-shared.so.0: cannot open shared object file` failure and exit status 127 reported on Fedora 44.
-- Ubuntu 24.04/26.04 amd64: the same runtime uses `/usr/lib/x86_64-linux-gnu/hermes` and an absolute RUNPATH, preventing the corresponding secure-loader failure.
-- DEBs explicitly require `libcap2-bin`, which supplies the installation's `setcap` command. Capture and isolated-session capabilities are preserved.
+- **Fedora 43/44:** fixed loading of the bundled PyroWave library when Hermes runs with its required capabilities. This addresses the `libpyrowave-shared.so.0` error and exit status 127 before startup.
+- **Ubuntu 24.04/26.04:** adjusted the library location and search path to prevent the same problem.
+- **Ubuntu packages:** added the dependency that provides `setcap`, ensuring the required capabilities can be applied during installation.
+- Updated package versions so RC2 is recognized as an upgrade from RC1.
 
-## Package validation
+The capabilities needed for KMS capture and isolated sessions are preserved.
 
-Publication requires the host test suite, all native package builds, and a four-distribution secure-loader matrix. Each RPM and DEB is installed, its codec/RUNPATH/capabilities are checked, a codec-linked probe proves `AT_SECURE=1` as a non-root user, and the installed Hermes executable runs `--help` in a clean environment. A negative control reproduces rejection of the old relative ORIGIN path. Portable-bundle relocation is checked separately.
+## Additional packaging checks
 
-`RC_MANIFEST.json` records the exact source commit, embedded build version, successful workflow and package hashes. `SHA256SUMS` covers the payloads and manifest.
+The release pipeline now installs each RPM and DEB and checks that Hermes starts as a regular user with capabilities enabled and without a custom library environment.
 
-## Install or update
+It also tests secure library loading on Fedora 43/44 and Ubuntu 24.04/26.04, alongside the existing host tests.
 
-Download the package matching your distribution and release.
+## Installing or updating
 
-Fedora, from the download directory:
+Download the RC2 package matching your distribution.
+
+**Fedora 44:**
 
 ```bash
-sudo dnf install ./hermes-*.fc44.x86_64.rpm
-# Fedora 43: select the fc43 package instead.
+sudo dnf install ./hermes-0.6.0+rc2.*-1.fc44.x86_64.rpm
+```
+
+For Fedora 43, select the `fc43` package instead.
+
+**Ubuntu 24.04:**
+
+```bash
+sudo apt install ./hermes_0.6.0+rc2.*_ubuntu24.04_amd64.deb
+```
+
+For Ubuntu 26.04, select the `ubuntu26.04` package instead.
+
+After installation, reload and restart the user service. Resetting its failed state clears the startup limit reached by the broken RC1 package:
+
+```bash
 systemctl --user daemon-reload
 systemctl --user reset-failed hermes.service
 systemctl --user restart hermes.service
 ```
 
-Ubuntu, from the download directory:
+Arch/CachyOS users can install the updated `hermes-streaming` package.
 
-```bash
-sudo apt install ./hermes_*_ubuntu24.04_amd64.deb
-# Ubuntu 26.04: select the ubuntu26.04 package instead.
-systemctl --user daemon-reload
-systemctl --user reset-failed hermes.service
-systemctl --user restart hermes.service
-```
+## Compatible components
 
-RC2 packages use `0.6.0+rc2.<commit>` to sort after RC1's commit-only version. Do not remove capabilities or set LD_LIBRARY_PATH as a workaround.
+Continue using the existing release candidates:
 
-## Compatible components and remaining testing
+- [Hestia RC1](https://github.com/MrOz59/Hestia/releases/tag/october-2026-rc1)
+- [Hestia-Android RC1](https://github.com/MrOz59/Hestia-Android/releases/tag/october-2026-rc1)
+- [Hermes-KMS RC1](https://github.com/MrOz59/Hermes-KMS/releases/tag/october-2026-rc1)
 
-Use the existing [Hestia RC1](https://github.com/MrOz59/Hestia/releases/tag/october-2026-rc1), [Hestia-Android RC1](https://github.com/MrOz59/Hestia-Android/releases/tag/october-2026-rc1) and [Hermes-KMS RC1](https://github.com/MrOz59/Hermes-KMS/releases/tag/october-2026-rc1). This host packaging update does not require rebuilding those components.
+This Hermes packaging update does not require updating those components.
 
-Real-host capture/encode, desktop and Android streaming, HDR with the existing codecs, reconnects, DS4/DualSense, isolated Gamescope sessions and private audio/microphone remain RC hardware tests. PyroWave remains an explicit SDR YUV 4:2:0 LAN option. Report the RC tag, embedded build version, distribution, GPU/driver/kernel and logs from both ends.
+## Testing and reports
+
+This remains a prerelease. Testing on real hardware is still needed for streaming, reconnects, controllers, stylus input, isolated Gamescope sessions, private audio and microphone passthrough.
+
+PyroWave remains an explicit SDR option intended for fast local networks. Use the existing codecs for HDR.
+
+When reporting a problem, include the Hermes build version, distribution, GPU/driver/kernel, client device, selected codec and logs from both ends.
+
+## Community and support
+
+You can also ask for help on our new [Discord server](https://discord.gg/M5dYFuhjqP).
+
+Please allow some time for a response: the server is still new, the community is small, and time zone differences may affect availability. Thanks for your patience!
