@@ -19,6 +19,17 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d /tmp/hermes-runtime-loader.XXXXXX)
 trap 'rm -rf "$work"' EXIT
 chmod 755 "$work"
+# Cache types differ between Ubuntu's CMake versions. Exercise every type
+# observed for this command-line option, including 26.04's UNINITIALIZED.
+for cache_type in PATH STRING UNINITIALIZED; do
+  printf 'CMAKE_INSTALL_LIBDIR:%s=lib/x86_64-linux-gnu\n' "$cache_type" > "$work/cache-fixture"
+  [[ $(bash "$repo/scripts/cmake-install-libdir.sh" "$work/cache-fixture") == lib/x86_64-linux-gnu ]]
+done
+printf 'CMAKE_INSTALL_BINDIR:PATH=bin\n' > "$work/cache-fixture"
+if bash "$repo/scripts/cmake-install-libdir.sh" "$work/cache-fixture" 2>/dev/null; then
+  echo 'Missing LIBDIR was incorrectly accepted' >&2
+  exit 1
+fi
 mkdir -p "$work/sdk/lib" "$work/source"
 printf 'int codec_fixture(void) { return 42; }\n' > "$work/codec.c"
 cc -shared -fPIC "$work/codec.c" -Wl,-soname,libpyrowave-shared.so.0 \
@@ -62,6 +73,7 @@ for libdir in lib lib64 lib/x86_64-linux-gnu; do
   cmake -S "$work/source" -B "$work/build-${libdir//\//-}" \
     -DHERMES_SOURCE="$repo" -DSDK="$work/sdk" \
     -DCMAKE_INSTALL_PREFIX="$prefix" -DCMAKE_INSTALL_LIBDIR="$libdir"
+  [[ $(bash "$repo/scripts/cmake-install-libdir.sh" "$work/build-${libdir//\//-}/CMakeCache.txt") == "$libdir" ]]
   cmake --build "$work/build-${libdir//\//-}"
   DESTDIR="$work/stage" cmake --install "$work/build-${libdir//\//-}"
   # DESTDIR must not enter the runtime path. Move to the configured prefix.

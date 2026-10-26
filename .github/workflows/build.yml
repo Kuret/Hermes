@@ -644,7 +644,7 @@ jobs:
           #
           # dpkg-shlibdeps reads debian/control for the package name, so give it
           # a throwaway one rather than a full debian/ source tree.
-          LIBDIR="$(sed -n 's/^CMAKE_INSTALL_LIBDIR:PATH=//p' build/CMakeCache.txt)"
+          LIBDIR="$(bash scripts/cmake-install-libdir.sh build/CMakeCache.txt)"
           test -n "${LIBDIR}"
           CODEC_LIB_PATH="$(readlink -f "${PKGDIR}/usr/${LIBDIR}/hermes")"
           # The session broker is a separate executable with its own dependencies
