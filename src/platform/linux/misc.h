@@ -32,3 +32,8 @@ namespace dyn {
   void *handle(const std::vector<const char *> &libs);
 
 }  // namespace dyn
+
+namespace platf {
+  /** Ask the user manager to stop Hermes when Quit was selected inside its service. */
+  bool request_user_service_stop();
+}

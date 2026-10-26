@@ -45,6 +45,8 @@
 #include "clipboard_process.h"
 #include "graphics.h"
 #include "misc.h"
+#include "process_group.h"
+#include "service_lifecycle.h"
 #include "session_attach.h"
 #include "src/config.h"
 #include "src/entry_handler.h"
@@ -523,7 +525,7 @@ std::string get_local_ip_for_gateway() {
   }
 
   bool request_process_group_exit(std::uintptr_t native_handle) {
-    if (kill(-((pid_t) native_handle), SIGTERM) == 0 || errno == ESRCH) {
+    if (process_group::signal(native_handle, SIGTERM)) {
       BOOST_LOG(debug) << "Successfully sent SIGTERM to process group: "sv << native_handle;
       return true;
     } else {
@@ -533,7 +535,40 @@ std::string get_local_ip_for_gateway() {
   }
 
   bool process_group_running(std::uintptr_t native_handle) {
-    return waitpid(-((pid_t) native_handle), nullptr, WNOHANG) >= 0;
+    return process_group::running(native_handle);
+  }
+
+  bool request_user_service_stop() {
+    std::ifstream cgroups {"/proc/self/cgroup"};
+    std::string entry;
+    bool managed = false;
+    while (std::getline(cgroups, entry)) {
+      if (is_hermes_user_service_cgroup(entry)) {
+        managed = true;
+        break;
+      }
+    }
+    if (!managed) {
+      return false;
+    }
+
+    // --no-block only queues the stop job; waiting for the unit to stop here
+    // would deadlock against our own exit. A deliberate stop also suppresses
+    // Restart=on-failure if a remaining workload hits systemd's stop timeout.
+    std::error_code ec;
+    boost::filesystem::path working_dir {"/"};
+    auto child = run_command(false, false, "systemctl --user --no-block stop hermes.service",
+                             working_dir, boost::this_process::environment(), nullptr, ec, nullptr);
+    if (!ec && child.valid()) {
+      if (child.wait_for(2s, ec) && !ec && child.exit_code() == 0) {
+        BOOST_LOG(info) << "Requested intentional stop of hermes.service from system tray";
+        return true;
+      }
+      child.terminate(ec);
+      child.detach();
+    }
+    BOOST_LOG(warning) << "Unable to request user-service stop; continuing normal shutdown";
+    return false;
   }
 
   struct sockaddr_in to_sockaddr(boost::asio::ip::address_v4 address, uint16_t port) {
