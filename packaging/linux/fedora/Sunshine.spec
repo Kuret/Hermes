@@ -130,6 +130,7 @@ cmake_args=(
   "-DBUILD_WERROR=ON"
   "-DCMAKE_BUILD_TYPE=Release"
   "-DCMAKE_INSTALL_PREFIX=%{_prefix}"
+  "-DCMAKE_INSTALL_LIBDIR=%{_lib}"
   "-DSUNSHINE_ASSETS_DIR=%{_datadir}/sunshine"
   "-DSUNSHINE_EXECUTABLE_PATH=%{_bindir}/sunshine"
   "-DSUNSHINE_ENABLE_WAYLAND=ON"

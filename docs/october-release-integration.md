@@ -27,8 +27,18 @@ LAN option. Ordinary automatic codec selection remains on the existing codecs.
 
 - The full host test build requires the SDK rather than silently disabling it.
 - Arch, DEB and RPM CI build the same pinned SDK and require codec support.
-- Bundled Hermes libraries install privately under `/usr/lib/hermes` and Hestia
-  libraries under `/usr/lib/hestia`; they must coexist without file conflicts.
+- Bundled Hermes libraries install privately under the distribution's native
+  library directory: `/usr/lib/hermes` on Arch, `/usr/lib64/hermes` on Fedora
+  x86_64 and `/usr/lib/x86_64-linux-gnu/hermes` on Ubuntu amd64. Hestia uses its
+  own private directory; the packages must coexist without file conflicts.
+- Native Hermes packages use an absolute install RUNPATH to that private
+  directory. File capabilities enable glibc secure execution, which can reject
+  the old `$ORIGIN/../lib/hermes` path on Fedora and Ubuntu. AppImage/Flatpak
+  retain a relative path for relocation. No global ldconfig entry is added.
+- RPM and DEB CI install the finished package, verify its capabilities and
+  RUNPATH, prove `AT_SECURE=1` in a codec-linked probe with the same capabilities,
+  and execute `/usr/bin/hermes --help` as a non-root user in a clean environment.
+  An `ldd` or root-only launch is insufficient to catch this regression.
 - Hestia Linux tarballs carry the codec beside the client with a relative
   RUNPATH. AppImage CI also builds the SDK before bundling dependencies.
 - Android's codec workflow checks the native library and JNI exports in the

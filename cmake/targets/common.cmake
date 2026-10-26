@@ -30,19 +30,8 @@ endif()
 
 target_link_libraries(sunshine ${SUNSHINE_EXTERNAL_LIBRARIES} ${EXTRA_LIBS})
 if(PYROWAVE_FOUND AND SUNSHINE_BUNDLE_PYROWAVE AND UNIX AND NOT APPLE)
-    pkg_get_variable(PYROWAVE_RUNTIME_DIR pyrowave-shared libdir)
-    file(GLOB PYROWAVE_RUNTIME_FILES "${PYROWAVE_RUNTIME_DIR}/libpyrowave-shared.so*")
-    if(NOT PYROWAVE_RUNTIME_FILES)
-        message(FATAL_ERROR "No shared PyroWave runtime found to bundle")
-    endif()
-    install(FILES ${PYROWAVE_RUNTIME_FILES} DESTINATION lib/hermes)
-    # Private libraries avoid conflicts with external SDK packages or Hestia.
-    set_property(TARGET sunshine APPEND PROPERTY INSTALL_RPATH "$ORIGIN/../lib/hermes")
-    pkg_get_variable(PYROWAVE_SDK_PREFIX pyrowave-shared prefix)
-    if(EXISTS "${PYROWAVE_SDK_PREFIX}/share/licenses/pyrowave")
-        install(DIRECTORY "${PYROWAVE_SDK_PREFIX}/share/licenses/pyrowave"
-                DESTINATION share/licenses/hermes)
-    endif()
+    include(${CMAKE_MODULE_PATH}/targets/pyrowave-runtime.cmake)
+    sunshine_bundle_pyrowave_runtime(sunshine)
 endif()
 
 target_compile_definitions(sunshine PUBLIC ${SUNSHINE_DEFINITIONS})

@@ -138,6 +138,7 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
             ${CPACK_DEB_PLATFORM_PACKAGE_DEPENDS} \
             debianutils, \
             libcap2, \
+            libcap2-bin, \
             libcurl4, \
             libdrm2, \
             libgbm1, \
