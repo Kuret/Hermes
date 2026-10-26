@@ -437,7 +437,12 @@ jobs:
       - name: Check candidate upgrade ordering
         run: |
           case "$BRANCH" in
-            release/*-rc*) test "$(vercmp "$BUILD_VERSION" '0.6.0+964c5fa')" -gt 0 ;;
+            release/*-rc*)
+              test "$(vercmp "$BUILD_VERSION" '0.6.0+964c5fa')" -gt 0
+              if [[ "$GITHUB_REF_NAME" =~ -rc([0-9]+)$ && "${BASH_REMATCH[1]}" -ge 3 ]]; then
+                test "$(vercmp "$BUILD_VERSION" '0.6.0+20261026.rc2.f8ae5a5')" -gt 0
+              fi
+              ;;
           esac
 
       - name: Stamp the build version into the PKGBUILD
@@ -579,7 +584,12 @@ jobs:
       - name: Check candidate upgrade ordering
         run: |
           case "$BRANCH" in
-            release/*-rc*) dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+964c5fa' ;;
+            release/*-rc*)
+              dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+964c5fa'
+              if [[ "$GITHUB_REF_NAME" =~ -rc([0-9]+)$ && "${BASH_REMATCH[1]}" -ge 3 ]]; then
+                dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+20261026.rc2.f8ae5a5'
+              fi
+              ;;
           esac
 
       - name: Setup Node
@@ -816,7 +826,12 @@ jobs:
       - name: Check candidate upgrade ordering
         run: |
           case "$BRANCH" in
-            release/*-rc*) test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+964c5fa'))}")" -gt 0 ;;
+            release/*-rc*)
+              test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+964c5fa'))}")" -gt 0
+              if [[ "$GITHUB_REF_NAME" =~ -rc([0-9]+)$ && "${BASH_REMATCH[1]}" -ge 3 ]]; then
+                test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+20261026.rc2.f8ae5a5'))}")" -gt 0
+              fi
+              ;;
           esac
 
       - name: Checkout
@@ -1084,7 +1099,10 @@ jobs:
           test "$(find payload -name '*.deb' | wc -l)" -eq 2
           test "$(find payload -name '*.rpm' | wc -l)" -eq 2
           test "$(find payload -name 'hermes-streaming-*.pkg.tar.zst' | wc -l)" -ge 1
+          notes="docs/${tag}-notes.md"
+          test -s "$notes"
           export RC_TAG="$tag"
+          printf 'RC_NOTES=%s\n' "$notes" >> "$GITHUB_ENV"
           python3 - <<'PYTHON'
           import hashlib, json, os
           from pathlib import Path
@@ -1111,5 +1129,5 @@ jobs:
           prerelease: true
           make_latest: false
           fail_on_unmatched_files: true
-          body_path: docs/october-rc2-notes.md
+          body_path: ${{ env.RC_NOTES }}
           files: payload/*
