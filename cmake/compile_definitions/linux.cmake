@@ -244,6 +244,13 @@ if(WAYLAND_FOUND)
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "staging/ext-foreign-toplevel-list" ext-foreign-toplevel-list-v1)
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "staging/ext-image-capture-source" ext-image-capture-source-v1)
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "staging/ext-image-copy-capture" ext-image-copy-capture-v1)
+    # color-management lets a client say it understands colour, and ask the
+    # compositor what an output is encoding. A compositor that can run an output
+    # in HDR would otherwise tone-map every capture to sRGB for a client that
+    # never said otherwise, so this is what lets an HDR output be captured as
+    # the PQ it is. The vendored checkout already carries it, like the ext-*
+    # files above.
+    GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "staging/color-management" color-management-v1)
     GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/wlr-protocols" "unstable" wlr-screencopy-unstable-v1)
     GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/wlr-protocols" "unstable" wlr-output-management-unstable-v1)
 
