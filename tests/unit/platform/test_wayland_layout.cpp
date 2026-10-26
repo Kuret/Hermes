@@ -76,3 +76,15 @@ TEST(WaylandInputGeometry, TakesAnUnknownLogicalSizeAsScaleOne) {
 }
 
 #endif  // SUNSHINE_BUILD_WAYLAND
+
+TEST(WaylandRightOf, IsTheEdgeOfTheEnvelope) {
+  EXPECT_EQ(wl::right_of({{0, 0, 2400, 1350}, {2400, 0, 1920, 1080}}), 4320);
+  // An output left of the origin does not move the edge; the envelope does.
+  EXPECT_EQ(wl::right_of({{-2400, 0, 2400, 1350}, {0, 0, 1920, 1080}}), 1920);
+  EXPECT_EQ(wl::right_of({{-2400, 0, 2400, 1350}}), 0);
+}
+
+TEST(WaylandRightOf, NothingMeansTheOrigin) {
+  EXPECT_EQ(wl::right_of({}), 0);
+  EXPECT_EQ(wl::right_of({{0, 0, 0, 0}}), 0);
+}

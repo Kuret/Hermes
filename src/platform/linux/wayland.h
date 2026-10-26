@@ -469,6 +469,16 @@ namespace wl {
    */
   output_rect_t desktop_envelope(const std::vector<output_rect_t> &outputs);
 
+  /**
+   * @brief The x just past the right edge of the given outputs, in logical
+   * coordinates; 0 when none has a positive size.
+   *
+   * Where an output goes that must not overlap any of them. Outputs left of
+   * the origin count too: the edge is that of the envelope, not the sum of the
+   * widths.
+   */
+  int right_of(const std::vector<output_rect_t> &outputs);
+
   /** The streamed output's place in the desktop envelope, see platf::display_t. */
   struct input_geometry_t {
     int offset_x, offset_y;
