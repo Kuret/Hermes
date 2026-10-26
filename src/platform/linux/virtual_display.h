@@ -1023,6 +1023,33 @@ namespace VDISPLAY {
    */
   std::string hyprlandModeString(int width, int height, int refresh_mhz);
 
+  /**
+   * The rule Hermes pins on a Hyprland headless output, as the Lua expression
+   * `eval` takes.
+   *
+   * Ten-bit is always asked for, so the output can carry HDR without a second
+   * mode set when a later session wants it. HDR itself is `cm = "hdr"` with
+   * `supports_hdr` and `supports_wide_color`: a headless output has no EDID to
+   * claim either, and without them the preset stays sRGB whatever `cm` says.
+   * SDR leaves `cm` out, so a rule that replaces an HDR one - rules replace by
+   * output name - drops back to Hyprland's own choice for the bit depth.
+   */
+  std::string hyprlandMonitorRule(const std::string &name, int width, int height, int refresh_mhz, bool hdr);
+
+  /** The same rule in the `keyword monitor` syntax of a Hyprland that predates the Lua config. */
+  std::string hyprlandKeywordMonitorRule(const std::string &name, int width, int height, int refresh_mhz, bool hdr);
+
+  /** What `hyprctl monitors -j` says about one output. */
+  struct hyprland_monitor_state_t {
+    int width;
+    int height;
+    int refresh_mhz;
+    std::string color_preset;  ///< `colorManagementPreset`: "srgb", "hdr", ...; empty when Hyprland has none.
+  };
+
+  /** @return nullopt when the output is not listed or the text is not the JSON of `monitors`. */
+  std::optional<hyprland_monitor_state_t> hyprlandMonitorState(const std::string &monitors_json, const std::string &output);
+
   /** Match only the owned KDE virtual output to the connecting client's HDR request. */
   bool configureVirtualDisplayHdr(const std::string &displayName, bool hdr);
 

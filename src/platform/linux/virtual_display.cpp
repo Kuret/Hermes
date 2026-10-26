@@ -614,6 +614,10 @@ namespace VDISPLAY {
       return !path.empty() && std::filesystem::exists(path);
     }
 
+    // The HDR state each pinned output was last given; see pin_output().
+    static std::mutex hdr_mutex;
+    static std::map<std::string, bool> hdr_outputs;
+
     /** Send one command and return the whole reply, or nullopt if the socket refused. */
     static std::optional<std::string> request(const std::string &command) {
       const auto path = socket_path();
@@ -752,37 +756,110 @@ namespace VDISPLAY {
      * ones, which is where the wlr-output-management step put it anyway. A
      * future `mirror` layout on Hyprland belongs in this rule too, through
      * Hyprland's `mirror` option, not in overlapping positions.
+     *
+     * The rule also fixes the output's colour: ten-bit always, and HDR when
+     * @p hdr says so or, left unsaid, when the output's last rule did. Colour is
+     * part of the rule rather than something applied next to it because a rule
+     * replaces the one before by name, so any rule that left it out would undo
+     * it - including the re-pin a mid-session mode change makes.
      */
-    static void pin_output(const std::string &name, int width, int height, int refresh_mhz) {
+    static bool pin_output(const std::string &name, int width, int height, int refresh_mhz, std::optional<bool> hdr = std::nullopt) {
       if (width <= 0 || height <= 0) {
-        return;
+        return false;
       }
       // The name is interpolated into a Lua expression and a config line.
       if (!safe_output_name(name)) {
         BOOST_LOG(warning) << "[VDISPLAY] Refusing to pin a Hyprland monitor rule for an unsafe output name.";
-        return;
+        return false;
       }
-      const std::string mode = hyprlandModeString(width, height, refresh_mhz);
+      // Rules replace by name, so a re-pin for a new mode that said nothing
+      // about HDR would quietly turn it off. The state a rule last carried is
+      // therefore kept and reused whenever the caller does not name one.
+      const bool want_hdr = [&]() {
+        std::lock_guard<std::mutex> lock(hdr_mutex);
+        if (hdr) {
+          hdr_outputs[name] = *hdr;
+        }
+        const auto it = hdr_outputs.find(name);
+        return it != hdr_outputs.end() && it->second;
+      }();
 
-      std::string rule = "hl.monitor({ output = \"" + name + "\", mode = \"" + mode + "\", position = \"auto\", scale = 1 })";
+      std::string rule = hyprlandMonitorRule(name, width, height, refresh_mhz, want_hdr);
       auto reply = request("/eval " + rule);
       if (!reply || reply->rfind("ok", 0) != 0) {
         BOOST_LOG(info) << "[VDISPLAY] Hyprland did not take the monitor rule through eval"
                         << (reply ? " (" + *reply + ")" : " (no reply from its socket)") << "; trying keyword.";
-        rule = name + "," + mode + ",auto,1";
+        rule = hyprlandKeywordMonitorRule(name, width, height, refresh_mhz, want_hdr);
         reply = request("/keyword monitor " + rule);
       }
       if (!reply || reply->rfind("ok", 0) != 0) {
         BOOST_LOG(warning) << "[VDISPLAY] Hyprland refused the monitor rule '" << rule << "'"
                            << (reply ? ": " + *reply : " (no reply from its socket).");
-        return;
+        return false;
       }
       BOOST_LOG(info) << "[VDISPLAY] Pinned Hyprland monitor rule '" << rule << "'";
+      return true;
+    }
+
+    /**
+     * @brief Put a headless output into HDR, or back to SDR, and wait until Hyprland says it is.
+     *
+     * The rule is what switches it - see hyprlandMonitorRule() - and Hyprland
+     * applies a rule asynchronously, so the reply to the eval is not the answer:
+     * the answer is the output's colorManagementPreset in `monitors`, polled for
+     * the same 1.5 s the KScreen path allows. The rule is pinned at the mode the
+     * output is already running, so this changes the colour and nothing else.
+     *
+     * "SDR" means anything but "hdr": a ten-bit output with no cm of its own may
+     * settle on a preset other than "srgb", and that is still not HDR.
+     *
+     * A configuration that re-applies its own rule to the output afterwards, say
+     * with another scale, keeps cm and bitdepth - that is what such a rule
+     * means - so this does not guard against it and does not need to.
+     */
+    static bool set_output_hdr(const std::string &name, bool hdr) {
+      const char *label = hdr ? "HDR" : "SDR";
+      const auto read_state = [&]() {
+        const auto reply = request("j/monitors");
+        return reply ? hyprlandMonitorState(*reply, name) : std::nullopt;
+      };
+
+      const auto state = read_state();
+      if (!state) {
+        BOOST_LOG(error) << "[VDISPLAY/Hyprland] Cannot read the state of " << name << " from Hyprland's socket.";
+        return false;
+      }
+      if (!pin_output(name, state->width, state->height, state->refresh_mhz, hdr)) {
+        BOOST_LOG(error) << "[VDISPLAY/Hyprland] Could not ask Hyprland for " << label << " on " << name << '.';
+        return false;
+      }
+
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds {1500};
+      std::string preset = state->color_preset;
+      do {
+        if (const auto now = read_state()) {
+          preset = now->color_preset;
+          if ((preset == "hdr") == hdr) {
+            BOOST_LOG(info) << "[VDISPLAY/Hyprland] " << name << " confirmed " << label << " (preset '" << preset << "')";
+            return true;
+          }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds {20});
+      } while (std::chrono::steady_clock::now() < deadline);
+
+      BOOST_LOG(error) << "[VDISPLAY/Hyprland] " << name << " did not switch to " << label
+                       << " before capture; its color preset is still '" << preset << "'."
+                       << (hdr ? " This Hyprland may not support cm/supports_hdr on a headless output." : "");
+      return false;
     }
 
     static bool remove_output(const std::string &name) {
       if (name.empty()) {
         return false;
+      }
+      {
+        std::lock_guard<std::mutex> lock(hdr_mutex);
+        hdr_outputs.erase(name);
       }
       const auto reply = request("/output remove " + name);
       if (!reply || reply->rfind("ok", 0) != 0) {
@@ -7482,6 +7559,43 @@ namespace VDISPLAY {
     return mode;
   }
 
+  std::string hyprlandMonitorRule(const std::string &name, int width, int height, int refresh_mhz, bool hdr) {
+    std::string rule = "hl.monitor({ output = \"" + name + "\", mode = \"" + hyprlandModeString(width, height, refresh_mhz) +
+                       "\", position = \"auto\", scale = 1, bitdepth = 10";
+    if (hdr) {
+      rule += ", cm = \"hdr\", supports_hdr = 1, supports_wide_color = 1";
+    }
+    return rule + " })";
+  }
+
+  std::string hyprlandKeywordMonitorRule(const std::string &name, int width, int height, int refresh_mhz, bool hdr) {
+    std::string rule = name + "," + hyprlandModeString(width, height, refresh_mhz) + ",auto,1,bitdepth,10";
+    if (hdr) {
+      rule += ",cm,hdr,supports_hdr,1,supports_wide_color,1";
+    }
+    return rule;
+  }
+
+  std::optional<hyprland_monitor_state_t> hyprlandMonitorState(const std::string &monitors_json, const std::string &output) {
+    try {
+      const auto data = nlohmann::json::parse(monitors_json);
+      for (const auto &entry : data) {
+        if (entry.value("name", std::string {}) != output) {
+          continue;
+        }
+        return hyprland_monitor_state_t {
+          entry.value("width", 0),
+          entry.value("height", 0),
+          static_cast<int>(std::lround(entry.value("refreshRate", 0.0) * 1000.0)),
+          entry.value("colorManagementPreset", std::string {}),
+        };
+      }
+    } catch (const std::exception &) {
+      // A reply that is not the monitor list says nothing about the output.
+    }
+    return std::nullopt;
+  }
+
   std::string getHyprlandOutputName(const std::string &displayName) {
     std::lock_guard<std::mutex> lock(vdisplay_mutex);
     for (const auto &[guid, vdinfo] : virtual_displays) {
@@ -7723,6 +7837,12 @@ namespace VDISPLAY {
   }
 
   bool configureVirtualDisplayHdr(const std::string &displayName, bool hdr) {
+    // A Hyprland headless output is switched by its monitor rule, whichever
+    // backend is configured: hermes_kms may well be the one in config while the
+    // session still lands here, as it is on a Hyprland desktop.
+    if (const auto hyprland_output = getHyprlandOutputName(displayName); !hyprland_output.empty()) {
+      return hyprland::set_output_hdr(hyprland_output, hdr);
+    }
     if (config::video.virtual_display_backend != "hermes_kms" ||
         window_system != window_system_e::WAYLAND || !kscreen::is_active(displayName)) {
       return true;  // Other compositors retain their own color configuration.
