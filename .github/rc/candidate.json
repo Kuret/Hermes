@@ -1,0 +1,45 @@
+{
+  "component": "Hermes",
+  "repository": "MrOz59/Hermes",
+  "tag": "october-2026-rc1",
+  "source_sha": "964c5fa24b4992f942a59142e82b3adee8214de9",
+  "build_run": 40265406947,
+  "check_runs": [
+    40265411121,
+    40265411181,
+    40265411068
+  ],
+  "build_version": "0.6.0+964c5fa",
+  "artifacts": [
+    {
+      "id": 12627310346,
+      "name": "hermes-rpm-fc44",
+      "digest": "sha256:14129eb1f25700d6449a7620ae743de643a58e39ba4f416d5ee97e11981f9d2f"
+    },
+    {
+      "id": 12627210662,
+      "name": "hermes-deb-ubuntu26.04",
+      "digest": "sha256:5e15fd1b1662cb5f57cfeb972c6ec527f91c8155c1dd4ac449c871cce1a7f242"
+    },
+    {
+      "id": 12626912202,
+      "name": "hermes-streaming-arch-pkg",
+      "digest": "sha256:f91a33c6bce5a9422a87d3884e0d5e380cf1c454213eaceb1510756cf29de9e2"
+    },
+    {
+      "id": 12626598661,
+      "name": "hermes-deb-ubuntu24.04",
+      "digest": "sha256:cd55fd27fbab1352945e9fa081e5338b324c0613cb7debd576affcd204317e70"
+    },
+    {
+      "id": 12626329636,
+      "name": "hermes-rpm-fc43",
+      "digest": "sha256:c47771550e51ff7d172f4d867041dfd8e42a03475fac1388fdb66b0a666f75f2"
+    }
+  ],
+  "groups": {
+    "*.deb": 2,
+    "*.rpm": 2,
+    "*.pkg.tar.zst": 1
+  }
+}
