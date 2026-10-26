@@ -439,7 +439,8 @@ jobs:
           case "$BRANCH" in
             release/*-rc*)
               test "$(vercmp "$BUILD_VERSION" '0.6.0+964c5fa')" -gt 0
-              if [[ "$GITHUB_REF_NAME" =~ -rc([0-9]+)$ && "${BASH_REMATCH[1]}" -ge 3 ]]; then
+              rc_number="${BRANCH##*-rc}"
+              if [ "$rc_number" -ge 3 ]; then
                 test "$(vercmp "$BUILD_VERSION" '0.6.0+20261026.rc2.f8ae5a5')" -gt 0
               fi
               ;;
@@ -586,7 +587,8 @@ jobs:
           case "$BRANCH" in
             release/*-rc*)
               dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+964c5fa'
-              if [[ "$GITHUB_REF_NAME" =~ -rc([0-9]+)$ && "${BASH_REMATCH[1]}" -ge 3 ]]; then
+              rc_number="${BRANCH##*-rc}"
+              if [ "$rc_number" -ge 3 ]; then
                 dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+20261026.rc2.f8ae5a5'
               fi
               ;;
@@ -828,7 +830,8 @@ jobs:
           case "$BRANCH" in
             release/*-rc*)
               test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+964c5fa'))}")" -gt 0
-              if [[ "$GITHUB_REF_NAME" =~ -rc([0-9]+)$ && "${BASH_REMATCH[1]}" -ge 3 ]]; then
+              rc_number="${BRANCH##*-rc}"
+              if [ "$rc_number" -ge 3 ]; then
                 test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+20261026.rc2.f8ae5a5'))}")" -gt 0
               fi
               ;;
