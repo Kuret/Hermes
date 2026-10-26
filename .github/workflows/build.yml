@@ -629,13 +629,22 @@ jobs:
           #
           # dpkg-shlibdeps reads debian/control for the package name, so give it
           # a throwaway one rather than a full debian/ source tree.
-          BIN_PATH="$(readlink -f "${PKGDIR}/usr/bin/hermes")"
           CODEC_LIB_PATH="$(readlink -f "${PKGDIR}/usr/lib/hermes")"
+          # The session broker is a separate executable with its own dependencies
+          # (notably libacl). Scan every staged ELF, including the private codec,
+          # rather than deriving the package's dependencies only from Hermes.
+          ELF_ARGS=()
+          while IFS= read -r -d '' candidate; do
+            if readelf -h "$candidate" >/dev/null 2>&1; then
+              ELF_ARGS+=("-e$(readlink -f "$candidate")")
+            fi
+          done < <(find "${PKGDIR}/usr/bin" "${PKGDIR}/usr/lib/hermes" -type f -print0)
+          (( ${#ELF_ARGS[@]} > 0 ))
           mkdir -p .shlibdeps/debian
           printf 'Source: hermes\nPackage: hermes\nArchitecture: amd64\n' \
             > .shlibdeps/debian/control
           DEB_DEPENDS="$(cd .shlibdeps \
-            && dpkg-shlibdeps -O --ignore-missing-info -l"${CODEC_LIB_PATH}" "${BIN_PATH}" \
+            && dpkg-shlibdeps -O --ignore-missing-info -l"${CODEC_LIB_PATH}" "${ELF_ARGS[@]}" \
             | sed 's/^shlibs:Depends=//')"
           rm -rf .shlibdeps
           if [ -z "${DEB_DEPENDS}" ]; then
@@ -651,7 +660,7 @@ jobs:
           Section: net
           Priority: optional
           Architecture: amd64
-          Depends: ${DEB_DEPENDS}
+          Depends: ${DEB_DEPENDS}, libvulkan1
           Recommends: evdi-dkms
           Maintainer: Hermes
           Description: Self-hosted game stream host with Linux virtual display support
@@ -835,6 +844,8 @@ jobs:
           License:        GPLv3
           URL:            https://github.com/MrOz59/Hermes
           Source0:        hermes-%{version}.tar.gz
+          # PyroWave loads Vulkan through volk; ELF scanning cannot guarantee it.
+          Requires:       vulkan-loader
 
           # The binary is built by the job above and only copied in %install, so
           # there are no sources for a debuginfo package to point at. Left on,
