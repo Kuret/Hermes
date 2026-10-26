@@ -81,6 +81,7 @@
 #else
   #include "platform/linux/session_audio.h"
   #include "platform/linux/session_broker.h"
+  #include "platform/linux/process_group.h"
   #include "platform/linux/session_devices.h"
   #include "platform/linux/virtual_display.h"
   #include <sys/stat.h>
@@ -1074,39 +1075,56 @@ namespace proc {
   }
 
   void terminate_process_group(boost::process::v1::child &proc, boost::process::v1::group &group, std::chrono::seconds exit_timeout) {
-    if (group.valid() && platf::process_group_running((std::uintptr_t) group.native_handle())) {
-      if (exit_timeout.count() > 0) {
-        // Request processes in the group to exit gracefully
-        if (platf::request_process_group_exit((std::uintptr_t) group.native_handle())) {
-          // If the request was successful, wait for a little while for them to exit.
-          BOOST_LOG(info) << "Successfully requested the app to exit. Waiting up to "sv << exit_timeout.count() << " seconds for it to close."sv;
-
-          // group::wait_for() and similar functions are broken and deprecated, so we use a simple polling loop
-          while (platf::process_group_running((std::uintptr_t) group.native_handle()) && (--exit_timeout).count() >= 0) {
-            std::this_thread::sleep_for(1s);
+    if (group.valid()) {
+      const auto handle = (std::uintptr_t) group.native_handle();
+      const auto running = [handle]() {
+#ifdef __linux__
+        // Reap our own terminated children while waiting; zombies alone must
+        // not keep signal-0 liveness true until the entire grace period expires.
+        platf::process_group::reap_children(handle);
+#endif
+        return platf::process_group_running(handle);
+      };
+      if (running()) {
+        if (exit_timeout.count() > 0 && platf::request_process_group_exit(handle)) {
+          BOOST_LOG(info) << "Successfully requested the app to exit. Waiting up to "sv
+                          << exit_timeout.count() << " seconds for it to close."sv;
+          const auto deadline = std::chrono::steady_clock::now() + exit_timeout;
+          while (running() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(50ms);
           }
-
-          if (exit_timeout.count() < 0) {
+          if (running()) {
             BOOST_LOG(warning) << "App did not fully exit within the timeout. Terminating the app's remaining processes."sv;
           } else {
             BOOST_LOG(info) << "All app processes have successfully exited."sv;
           }
         } else {
-          BOOST_LOG(info) << "App did not respond to a graceful termination request. Forcefully terminating the app's processes."sv;
+          BOOST_LOG(info) << "Forcefully terminating the app's remaining processes."sv;
         }
-      } else {
-        BOOST_LOG(info) << "No graceful exit timeout was specified for this app. Forcefully terminating the app's processes."sv;
-      }
 
-      // We always call terminate() even if we waited successfully for all processes above.
-      // This ensures the process group state is consistent with the OS in boost.
-      std::error_code ec;
-      group.terminate(ec);
+        std::error_code ec;
+        group.terminate(ec);
+        if (ec && ec != std::errc::no_such_process) {
+          BOOST_LOG(warning) << "Unable to terminate app process group [" << handle << "]: " << ec.message();
+        }
+#ifdef __linux__
+        // SIGKILL delivery is asynchronous. Give reaping a bounded window before
+        // releasing process/pipe/display ownership and handing control to systemd.
+        const auto deadline = std::chrono::steady_clock::now() + 1s;
+        while (running() && std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(10ms);
+        }
+        if (running()) {
+          BOOST_LOG(warning) << "App process group [" << handle << "] still exists after forced termination.";
+        }
+#endif
+      }
+      // Also detach an already-exited group so resetting its Boost wrapper
+      // cannot issue an implicit, unlogged kill later in cleanup.
       group.detach();
     }
 
     if (proc.valid()) {
-      // avoid zombie process
       proc.detach();
     }
   }
