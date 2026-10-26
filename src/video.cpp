@@ -464,7 +464,21 @@ namespace video {
       if (!pyrowave_succeeded(pyrowave_create_default_device(&device), "Vulkan device probe"sv)) {
         return;
       }
-      pyrowave_device_destroy(device);
+      auto cleanup_device = util::fail_guard([device]() {
+        pyrowave_device_destroy(device);
+      });
+      // A Vulkan device alone does not imply encoder support (for example,
+      // subgroup requirements can reject an otherwise usable Vulkan driver).
+      pyrowave_encoder_create_info probe_info {};
+      probe_info.device = device;
+      probe_info.width = 64;
+      probe_info.height = 64;
+      probe_info.chroma = PYROWAVE_CHROMA_SUBSAMPLING_420;
+      pyrowave_encoder encoder {};
+      if (!pyrowave_succeeded(pyrowave_encoder_create(&probe_info, &encoder), "Vulkan encoder probe"sv)) {
+        return;
+      }
+      pyrowave_encoder_destroy(encoder);
       available = true;
     });
     return available;
