@@ -604,6 +604,7 @@ jobs:
         run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(nproc)
 
       - name: Create DEB Package
+        shell: bash
         run: |
           VERSION="${BUILD_VERSION}"
           PKGDIR="hermes_${VERSION}_amd64"
