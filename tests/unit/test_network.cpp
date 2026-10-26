@@ -325,4 +325,3 @@ TEST(NetworkStartupRollbackTest, FailedSharedInitializationReleasesAnAcquiredPor
   EXPECT_TRUE(net::udp_port_available(net::IPV4, port));
   EXPECT_EQ(shutdowns, 1);
 }
-
