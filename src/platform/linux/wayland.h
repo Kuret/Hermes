@@ -493,10 +493,20 @@ namespace wl {
    * Configure a virtual output through wlroots' output-management protocol.
    * Returns false when the compositor does not expose that protocol or rejects
    * the requested layout.
+   *
+   * @param hold For an exclusive layout on a compositor that keeps what a client
+   *             configured as an override of its own rules, for as long as the
+   *             client's connection lives (Hyprland). The connection is then kept
+   *             open and serviced until the layout is restored, and the virtual
+   *             output is enabled without a mode, position, transform or scale of
+   *             its own, so those keep coming from the rules. Without it the
+   *             connection is closed on return.
    */
-  bool configure_virtual_output(const std::string &output_name, int width, int height, int refresh_rate, bool exclusive);
+  bool configure_virtual_output(const std::string &output_name, int width, int height, int refresh_rate, bool exclusive, bool hold = false);
   /** Restore the physical output layout saved by configure_virtual_output(). */
   bool restore_virtual_output_layout();
+  /** Restore the layout only if it is the one held for @p output_name; true when it is not. */
+  bool restore_virtual_output_layout_for(const std::string &output_name);
   /** Check whether the current compositor exposes wlroots output management. */
   bool output_management_supported();
 
@@ -590,12 +600,16 @@ namespace wl {
     return -1;
   }
 
-  inline bool configure_virtual_output(const std::string &, int, int, int, bool) {
+  inline bool configure_virtual_output(const std::string &, int, int, int, bool, bool = false) {
     return false;
   }
 
   inline bool restore_virtual_output_layout() {
     return false;
+  }
+
+  inline bool restore_virtual_output_layout_for(const std::string &) {
+    return true;
   }
 
   inline bool render_node_can_allocate(const char *) {

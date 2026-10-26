@@ -739,13 +739,14 @@ namespace VDISPLAY {
      * so they survive Hyprland re-applying its rules.
      *
      * Hyprland applies wlr-output-management state on top of the monitor rule
-     * that matches the output, but that state lives in the requesting
-     * client's manager object and is erased when the client disconnects.
-     * configure_virtual_output() destroys its connection on return, so the
-     * next rule reload - a physical display powering off is enough, and so is
-     * a config reload - finds nothing of what Hermes applied and puts the
-     * headless output back on the catch-all rule: on a scaled desktop that
-     * means a different mode, a different scale and an auto position, while
+     * that matches the output, on every rule reload, but that state lives in the
+     * requesting client's manager object and is erased the moment that client's
+     * manager goes away. configure_virtual_output() closes its connection on
+     * return, so the next rule reload - a physical display powering off is
+     * enough, and so is a config reload - finds nothing of what Hermes applied
+     * and puts the headless output back on the catch-all rule: on a scaled
+     * desktop that means a different mode, a different scale and an auto
+     * position, while
      * the stream keeps encoding the size it negotiated. A rule keyed by the
      * output's name outlasts a rule reapplication, which is all that case
      * needs. Rules replace by name and HEADLESS-N names are not reused, so one
@@ -1076,6 +1077,12 @@ namespace VDISPLAY {
       // Before the output goes, not after: a reload landing in between would
       // otherwise pin a rule for an output that is on its way out.
       unwatch_output(name);
+#ifdef SUNSHINE_BUILD_WAYLAND
+      // An exclusive layout held for this output goes with it. Removing the
+      // output first would leave the physical ones off with nothing on screen,
+      // for as long as the connection holding that layout lived.
+      wl::restore_virtual_output_layout_for(name);
+#endif
       const auto reply = request("/output remove " + name);
       if (!reply || reply->rfind("ok", 0) != 0) {
         BOOST_LOG(warning) << "[VDISPLAY] Hyprland refused to remove output " << name
@@ -8183,7 +8190,15 @@ namespace VDISPLAY {
       if (!virtual_display_mode(displayName, width, height, refresh_rate)) {
         return false;
       }
-      const bool enabled = wl::configure_virtual_output(connector, width, height, refresh_rate, true);
+      // Hyprland holds on to what a client configured, as an override of the
+      // monitor rules, only while that client's connection lives. The exclusive
+      // layout is such an override - the physical outputs turned off - so on
+      // Hyprland the connection that applied it is kept until the layout is
+      // restored; see wl::configure_virtual_output(). Pinning rules cannot do
+      // this job: a rule that enables a physical output is exactly what the
+      // user's configuration has, and every rule reload re-applies it.
+      const bool hold = !getHyprlandOutputName(displayName).empty();
+      const bool enabled = wl::configure_virtual_output(connector, width, height, refresh_rate, true, hold);
       if (enabled) {
         exclusive_virtual_display_active = true;
         BOOST_LOG(info) << "[VDISPLAY] Enabled exclusive Wayland layout for virtual output " << connector;

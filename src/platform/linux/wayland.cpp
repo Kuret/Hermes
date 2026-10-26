@@ -229,6 +229,9 @@ namespace wl {
 
     std::map<std::string, saved_output_t> saved_output_layout;
     bool saved_output_layout_available {false};
+    // Guards the saved layout and the held connection below. A restore has to
+    // see a configure as having finished, and the other way round.
+    std::mutex output_layout_mutex;
 
     struct output_control_t {
       display_t display;
@@ -427,6 +430,92 @@ namespace wl {
       };
     };
 
+    /**
+     * @brief An output-management connection kept open for as long as an
+     * exclusive layout is held, and the thread that keeps it serviced.
+     *
+     * Hyprland keeps what a client configured through output-management as an
+     * override of the matching monitor rule, per output name, in that client's
+     * manager object, and lays it over the rule on every rule reload: whether the
+     * output is enabled always, mode, position, transform and scale for whatever
+     * the client committed. It is erased when the manager goes away. An exclusive
+     * layout is made of exactly such overrides - the physical outputs disabled -
+     * so a connection closed on return, as configure_virtual_output() otherwise
+     * does, lets the very next reload turn them back on, and any rule applied to
+     * the headless output reloads. Holding the connection is what makes the
+     * layout last, and closing it is what ends it: the compositor drops the
+     * overrides and the rules govern again, which is also what happens if this
+     * process dies without restoring anything.
+     *
+     * The connection must not go unread. The compositor sends an event for every
+     * change to an output and a client whose queue fills up is disconnected,
+     * overrides and all. So a thread of its own sleeps in poll() on the connection
+     * and a stop pipe and dispatches what arrives. It is the only reader until
+     * stop() has joined it, after which the owner may use the connection alone.
+     */
+    struct held_layout_t {
+      std::unique_ptr<output_control_t> control;
+      std::string output;
+      std::thread thread;
+      int stop_pipe[2] {-1, -1};
+
+      held_layout_t(std::unique_ptr<output_control_t> control, std::string output):
+          control {std::move(control)},
+          output {std::move(output)} {
+        if (pipe2(stop_pipe, O_CLOEXEC) != 0) {
+          stop_pipe[0] = stop_pipe[1] = -1;
+          return;
+        }
+        thread = std::thread([this]() {
+          service();
+        });
+      }
+
+      ~held_layout_t() {
+        stop();
+        for (int fd : stop_pipe) {
+          if (fd >= 0) {
+            close(fd);
+          }
+        }
+      }
+
+      held_layout_t(const held_layout_t &) = delete;
+      held_layout_t &operator=(const held_layout_t &) = delete;
+
+      void stop() {
+        if (stop_pipe[1] >= 0) {
+          const char byte = 0;
+          [[maybe_unused]] const auto written = write(stop_pipe[1], &byte, 1);
+        }
+        if (thread.joinable()) {
+          thread.join();
+        }
+      }
+
+      void service() {
+        const int fd = wl_display_get_fd(control->display.get());
+        while (true) {
+          pollfd fds[2] = {{fd, POLLIN, 0}, {stop_pipe[0], POLLIN, 0}};
+          if (poll(fds, 2, -1) < 0) {
+            if (errno == EINTR) {
+              continue;
+            }
+            return;
+          }
+          if (fds[1].revents) {
+            return;
+          }
+          if (!control->display.dispatch(0ms) && control->display.connection_error()) {
+            BOOST_LOG(warning) << "The compositor closed the output-management connection holding the exclusive layout."sv;
+            return;
+          }
+        }
+      }
+    };
+
+    std::unique_ptr<held_layout_t> held_layout;
+
     output_mode_t *preferred_or_current_mode(output_head_t &head) {
       if (head.current_mode) {
         return head.current_mode;
@@ -445,7 +534,7 @@ namespace wl {
       return it == head.modes.end() ? nullptr : it->get();
     }
 
-    bool apply_configuration(output_control_t &control, output_head_t &virtual_head, int width, int height, int refresh_rate, bool exclusive, bool restore) {
+    bool apply_configuration(output_control_t &control, output_head_t &virtual_head, int width, int height, int refresh_rate, bool exclusive, bool restore, bool bare_virtual = false) {
       auto *configuration = zwlr_output_manager_v1_create_configuration(control.manager, control.serial);
       if (!configuration) {
         return false;
@@ -498,6 +587,17 @@ namespace wl {
 
         if (!enable) {
           zwlr_output_configuration_v1_disable_head(configuration, head->proxy);
+          continue;
+        }
+
+        // Enabled and nothing else: a compositor that keeps what a client asked
+        // for as an override of the output's rule, and applies it on top of the
+        // rule on every rule reload, would otherwise be told this output's mode,
+        // position, transform and scale for as long as the client holds on to it.
+        // Left unsaid, those stay whatever the rules - Hermes's own pin, the
+        // user's profile - say they are.
+        if (bare_virtual && head.get() == &virtual_head && !restore) {
+          zwlr_output_configuration_v1_enable_head(configuration, head->proxy);
           continue;
         }
 
@@ -2016,9 +2116,11 @@ namespace wl {
     return true;
   }
 
-  bool configure_virtual_output(const std::string &output_name, int width, int height, int refresh_rate, bool exclusive) {
+  bool configure_virtual_output(const std::string &output_name, int width, int height, int refresh_rate, bool exclusive, bool hold) {
+    std::lock_guard<std::mutex> layout_lock(output_layout_mutex);
     for (int attempt = 0; attempt < 5; ++attempt) {
-      output_control_t control;
+      auto owned = std::make_unique<output_control_t>();
+      auto &control = *owned;
       if (!control.init()) {
         BOOST_LOG(warning) << "Wayland compositor does not expose wlr-output-management; cannot activate virtual output "sv << output_name;
         return false;
@@ -2065,10 +2167,17 @@ namespace wl {
         }
       }
 
-      const bool applied = apply_configuration(control, *virtual_head, width, height, refresh_rate, exclusive, false);
+      // A layout already held is being replaced, and its connection must not be
+      // the thing that outlives the new one's overrides; it goes once the new
+      // one is in.
+      const bool applied = apply_configuration(control, *virtual_head, width, height, refresh_rate, exclusive, false, exclusive && hold);
       if (applied && exclusive) {
         saved_output_layout = std::move(previous_layout);
         saved_output_layout_available = true;
+        held_layout.reset();
+        if (hold) {
+          held_layout = std::make_unique<held_layout_t>(std::move(owned), output_name);
+        }
       }
       if (!applied) {
         BOOST_LOG(warning) << "Wayland compositor rejected the virtual output layout for "sv << output_name;
@@ -2081,17 +2190,48 @@ namespace wl {
   }
 
   bool restore_virtual_output_layout() {
+    std::lock_guard<std::mutex> layout_lock(output_layout_mutex);
     if (!saved_output_layout_available) {
+      // Nothing to put back, but a connection may still be held for a layout
+      // whose saved state is gone; it has no business outliving it.
+      held_layout.reset();
       return true;
     }
 
-    output_control_t control;
-    if (!control.init() || !control.collect() || control.heads.empty()) {
+    // The restore goes through the connection that applied the layout when there
+    // is one, so what it says replaces what that connection said; a fresh one
+    // would only add to it. The thread servicing it is stopped first, because
+    // the apply below reads the connection itself.
+    std::unique_ptr<output_control_t> fresh;
+    output_control_t *control = nullptr;
+    if (held_layout) {
+      held_layout->stop();
+      if (held_layout->control->collect()) {
+        control = held_layout->control.get();
+      } else {
+        BOOST_LOG(warning) << "The connection holding the exclusive layout is gone; restoring through a new one."sv;
+        held_layout.reset();
+      }
+    }
+    if (!control) {
+      fresh = std::make_unique<output_control_t>();
+      if (!fresh->init() || !fresh->collect()) {
+        BOOST_LOG(warning) << "Cannot restore the Wayland physical output layout."sv;
+        return false;
+      }
+      control = fresh.get();
+    }
+    if (control->heads.empty()) {
       BOOST_LOG(warning) << "Cannot restore the Wayland physical output layout."sv;
+      held_layout.reset();
       return false;
     }
 
-    const bool restored = apply_configuration(control, *control.heads.front(), 0, 0, 0, false, true);
+    const bool restored = apply_configuration(*control, *control->heads.front(), 0, 0, 0, false, true);
+    // Whatever the outcome, the connection goes now: its overrides are what the
+    // compositor keeps applying on top of the rules, and a restore that was
+    // refused is better left to the rules than to a stale override.
+    held_layout.reset();
     if (restored) {
       saved_output_layout.clear();
       saved_output_layout_available = false;
@@ -2100,6 +2240,16 @@ namespace wl {
       BOOST_LOG(warning) << "Wayland compositor rejected restoration of the physical output layout."sv;
     }
     return restored;
+  }
+
+  bool restore_virtual_output_layout_for(const std::string &output_name) {
+    {
+      std::lock_guard<std::mutex> layout_lock(output_layout_mutex);
+      if (!held_layout || held_layout->output != output_name) {
+        return true;
+      }
+    }
+    return restore_virtual_output_layout();
   }
 
   bool output_management_supported() {
